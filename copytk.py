@@ -46,7 +46,7 @@ def log(message, fn=None):
 # is larger than the current pane, divide it into sections and set the pane to the proper size.
 
 
-def runcmd(command, one=False, lines=False, emptylines=False):
+def runcmd(command, one=False, lines=False, noblanklines=False):
 	# runs command in shell via popen
 	f = os.popen(command)
 	data = f.read()
@@ -55,13 +55,13 @@ def runcmd(command, one=False, lines=False, emptylines=False):
 		raise Exception(f'Command "{command}" exited with status {estatus}')
 	if one or lines: # return list of lines
 		dlines = data.split('\n')
-		if not one and blanklines:
+		if not one and noblanklines:
 			dlines = [ l for l in dlines if len(l) > 0 ]
 	if one: # single-line
 		return dlines[0] if len(dlines) > 0 else ''
 	return dlines if lines else data
 
-def runtmux(args, one=False, lines=False, emptylines=False, sendstdin=None):
+def runtmux(args, one=False, lines=False, noblanklines=False, sendstdin=None):
 	args = [ str(a) for a in args ]
 	log('run tmux: ' + ' '.join(args))
 	with subprocess.Popen(
@@ -78,7 +78,7 @@ def runtmux(args, one=False, lines=False, emptylines=False, sendstdin=None):
 	data = recvstdout.decode('utf8')
 	if one or lines: # return list of lines
 		dlines = data.split('\n')
-		if not one and blanklines:
+		if not one and noblanklines:
 			dlines = [ l for l in dlines if len(l) > 0 ]
 	if one: # single-line
 		return dlines[0] if len(dlines) > 0 else ''
@@ -92,6 +92,76 @@ def runtmuxmulti(argsets):
 			allargs.append(';')
 		allargs.extend(argset)
 	runtmux(allargs)
+
+tmux_options_cache = {}
+def fetch_tmux_options(optmode='g'):
+	if optmode in tmux_options_cache:
+		return tmux_options_cache[optmode]
+	tmuxargs = [ 'show-options' ]
+	if optmode:
+		tmuxargs += [ '-' + optmode ]
+	rows = runtmux(tmuxargs, lines=True, noblanklines=True)
+	opts = {}
+	for row in rows:
+		i = row.find(' ')
+		if i == -1:
+			opts[row] = 'on'
+			continue
+		name = row[:i]
+		val = row[i+1:]
+		# need to process val for quoting and backslash-escapes
+		if val[0] == '"':
+			assert(val[-1] == '"')
+			val = val[1:-1]
+		if val.find('\\') != -1:
+			rval = ''
+			esc = False
+			for c in val:
+				if esc:
+					rval += c
+					esc = False
+				elif c == '\\':
+					esc = True
+				else:
+					rval += c
+			val = rval
+		opts[name] = val
+	tmux_options_cache[optmode] = opts
+	return opts
+
+def get_tmux_option(name, default=None, optmode='g', aslist=False):
+	opts = fetch_tmux_options(optmode)
+	if aslist:
+		ret = []
+		if name in opts:
+			ret.append(opts[name])
+		i = 0
+		while True:
+			lname = name + '[' + str(i) + ']'
+			if lname not in opts: break
+			ret.append(opts[lname])
+			i += 1
+		if len(ret) == 0 and default != None:
+			if isinstance(default, list):
+				return default
+			else:
+				return [ default ]
+		return ret
+	else:
+		return opts.get(name, default)
+
+def get_tmux_option_key_curses(name, default=None, optmode='g', aslist=False):
+	remap = {
+		'Escape': '\x1b',
+		'Enter': '\n',
+		'Space': ' '
+	}
+	v = get_tmux_option(name, default=default, optmode=optmode, aslist=aslist)
+	if aslist:
+		# also allow space-separated list
+		return [ remap.get(s, s) for k in v for s in k.split(' ') ]
+	else:
+		return remap.get(v, v)
 
 def capture_pane_contents(target=None):
 	args = [ 'capture-pane', '-p' ]
@@ -183,40 +253,6 @@ def cleanup_internal_process():
 		swap_hidden_pane()
 	runtmux([ 'kill-window', '-t', args.hidden_window ])
 
-def run_wrapper(main_action, args):
-	pane = get_pane_info(args.t)
-	# Wrap the inner utility in different ways depending on if the pane is zoomed or not.
-	# This is because tmux does funny thingy when swapping zoomed panes.
-	# When an ordinary pane, use 'pane-swap' mode.  In this case, the internal utility
-	# is run as a command in a newly created pane of the same size in a newly created window.
-	# The command pane is then swapped with the target pane, and swapped back once complete.
-	# In 'window-switch' mode, the internal utility is run as a single pane in a new window,
-	# then the active window is switched to that new window.  Once complete, the window is
-	# switched back.
-	if pane['zoomed']:
-		z_win_id = runtmux([ 'new-window', '-dP', '-F', '#{session_id}:#{window_id}', '/bin/sh' ], one=True)
-		hidden_pane = get_pane_info(z_win_id)
-		swap_mode = 'window-switch'
-	else:
-		hidden_pane = create_window_pane_of_size(pane['pane_size'])
-		swap_mode = 'pane-swap'
-	thisfile = os.path.abspath(__file__)
-	cmd = f'{python_command} "{thisfile}"'
-	def addopt(opt, val=None):
-		nonlocal cmd
-		if val == None:
-			cmd += ' \'' + opt + '\''
-		else:
-			cmd += ' \'' + opt + '\' \'' + str(val) + '\''
-	addopt('--run-internal')
-	addopt('-t', pane['pane_id'])
-	addopt('--hidden-t', hidden_pane['pane_id'])
-	addopt('--hidden-window', hidden_pane['window_id'])
-	addopt('--orig-window', pane['window_id'])
-	addopt('--swap-mode', swap_mode)
-	cmd += f' "{main_action}"'
-	#cmd += ' 2>/tmp/tm_wrap_log'
-	runtmux([ 'respawn-pane', '-k', '-t', hidden_pane['pane_id_full'], cmd ])
 
 
 def gen_em_labels(n, min_nchars=1, max_nchars=None):
@@ -297,6 +333,9 @@ class PaneJumpAction:
 		self.orig_pane = get_pane_info(args.t, capture=True)
 		self.overlay_pane = get_pane_info(args.hidden_t)
 
+		# Fetch options
+		self.cancel_keys = get_tmux_option_key_curses('@copytk-cancel-key', default='Escape Enter ^C', aslist=True)
+
 		# Initialize curses stuff
 		curses.curs_set(False)
 		curses.start_color()
@@ -347,7 +386,8 @@ class PaneJumpAction:
 			valid = lambda k: len(k) == 1 and k.isprintable()
 		while True:
 			key = self.stdscr.getkey()
-			if key in ('^[', '^C', '\n', '\x1b'):
+			#if key in ('^[', '^C', '\n', '\x1b'):
+			if key in self.cancel_keys:
 				self.cancel()
 			if key == 'KEY_RESIZE':
 				self.curses_size = self.stdscr.getmaxyx()
@@ -368,10 +408,14 @@ class EasyMotionAction(PaneJumpAction):
 	def __init__(self, stdscr, search_len=1):
 		super().__init__(stdscr)
 		self.search_len = search_len
+		self.case_sensitive_search = get_tmux_option('@copytk-case-sensitive-search', 'upper') # value values: on, off, upper
+		self.min_match_spacing = int(get_tmux_option('@copytk-min-match-spacing', '2'))
 
-	def _em_search_lines(self, datalines, srch, min_match_spacing=2):
+	def _em_search_lines(self, datalines, srch, min_match_spacing=2, matchcase=False):
+		if not matchcase: srch = srch.lower()
 		results = [] # (x, y)
 		for linenum, line in reversed(list(enumerate(datalines))):
+			if not matchcase: line = line.lower()
 			pos = 0
 			while True:
 				r = line.find(srch, pos)
@@ -392,7 +436,12 @@ class EasyMotionAction(PaneJumpAction):
 		# Find occurrences of search string in pane contents
 		pane_search_lines = process_pane_capture_lines(self.orig_pane['contents'], self.orig_pane['pane_size'][1])
 		log('\n'.join(pane_search_lines), 'pane_search_lines')
-		match_locations = self._em_search_lines(pane_search_lines, search_str)
+		match_locations = self._em_search_lines(
+			pane_search_lines,
+			search_str,
+			self.min_match_spacing,
+			self.case_sensitive_search == 'on' or (self.case_sensitive_search == 'upper' and search_str.lower() != search_str)
+		)
 
 		# Assign each match a label
 		label_it = gen_em_labels(len(match_locations))
@@ -419,11 +468,64 @@ class EasyMotionAction(PaneJumpAction):
 			move_tmux_cursor((self.match_locations[0][0], self.match_locations[0][1]), self.orig_pane['pane_id'])
 
 def run_easymotion(stdscr):
-	EasyMotionAction(stdscr, 2).run()
+	nkeys = 1
+	if args.search_nkeys:
+		nkeys = int(args.search_nkeys)
+	EasyMotionAction(stdscr, nkeys).run()
+
+
+
+
+
+
+
+def run_wrapper(main_action, args):
+	pane = get_pane_info(args.t)
+	# Wrap the inner utility in different ways depending on if the pane is zoomed or not.
+	# This is because tmux does funny thingy when swapping zoomed panes.
+	# When an ordinary pane, use 'pane-swap' mode.  In this case, the internal utility
+	# is run as a command in a newly created pane of the same size in a newly created window.
+	# The command pane is then swapped with the target pane, and swapped back once complete.
+	# In 'window-switch' mode, the internal utility is run as a single pane in a new window,
+	# then the active window is switched to that new window.  Once complete, the window is
+	# switched back.
+	if pane['zoomed']:
+		z_win_id = runtmux([ 'new-window', '-dP', '-F', '#{session_id}:#{window_id}', '/bin/sh' ], one=True)
+		hidden_pane = get_pane_info(z_win_id)
+		swap_mode = 'window-switch'
+	else:
+		hidden_pane = create_window_pane_of_size(pane['pane_size'])
+		swap_mode = 'pane-swap'
+	thisfile = os.path.abspath(__file__)
+	cmd = f'{python_command} "{thisfile}"'
+	def addopt(opt, val=None):
+		nonlocal cmd
+		if val == None:
+			cmd += ' \'' + opt + '\''
+		else:
+			cmd += ' \'' + opt + '\' \'' + str(val) + '\''
+	addopt('--run-internal')
+	addopt('-t', pane['pane_id'])
+	addopt('--hidden-t', hidden_pane['pane_id'])
+	addopt('--hidden-window', hidden_pane['window_id'])
+	addopt('--orig-window', pane['window_id'])
+	addopt('--swap-mode', swap_mode)
+
+	if args.search_nkeys:
+		addopt('--search-nkeys', args.search_nkeys)
+
+	cmd += f' "{main_action}"'
+	#cmd += ' 2>/tmp/tm_wrap_log'
+	runtmux([ 'respawn-pane', '-k', '-t', hidden_pane['pane_id_full'], cmd ])
+
+
+
+
 
 
 argp = argparse.ArgumentParser(description='tmux pane utils')
 argp.add_argument('-t', help='target pane')
+argp.add_argument('--search-nkeys', help='number of characters to key in to search')
 
 # internal args
 argp.add_argument('--run-internal', action='store_true')
