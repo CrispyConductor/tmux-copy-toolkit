@@ -364,8 +364,16 @@ class PaneJumpAction:
 
 	def _redraw_contents(self):
 		line_width = min(self.curses_size[1], self.orig_pane['pane_size'][0])
-		for i in range(min(self.curses_size[0], len(self.display_content_lines))):
-			self.stdscr.addstr(i, 0, self.display_content_lines[i][:line_width].ljust(self.curses_size[0]))
+		max_line = min(self.curses_size[0], len(self.display_content_lines))
+		for i in range(max_line):
+			line = self.display_content_lines[i][:line_width].ljust(self.curses_size[0])
+			if i >= max_line - 1 and len(line) >= line_width:
+				# curses doesn't like writing strings to bottom-right char
+				line = line[:line_width-1]
+			try:
+				self.stdscr.addstr(i, 0, line)
+			except Exception as err:
+				log(f'Error writing str to screen.  curses_size={self.curses_size} linelen={len(line)} i={i} err={str(err)}')
 
 	def _redraw_labels(self):
 		line_width = min(self.curses_size[1], self.orig_pane['pane_size'][0])
