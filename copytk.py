@@ -9,6 +9,7 @@ import itertools
 import math
 import subprocess
 import shutil
+from datetime import datetime
 
 logdir = '/tmp/tmplog'
 
@@ -34,9 +35,11 @@ def log_clear():
 	shutil.rmtree(logdir, ignore_errors=True)
 	os.makedirs(logdir)
 
-def log(message, fn=None):
+def log(message, fn=None, time=False):
 	if not logdir: return
 	if fn == None: fn = 'main.log'
+	if time:
+		message = str(datetime.now()) + ': ' + message
 	with open(os.path.join(logdir, fn), 'a') as f:
 		f.write(message + '\n')
 
@@ -63,7 +66,7 @@ def runcmd(command, one=False, lines=False, noblanklines=False):
 
 def runtmux(args, one=False, lines=False, noblanklines=False, sendstdin=None):
 	args = [ str(a) for a in args ]
-	log('run tmux: ' + ' '.join(args))
+	log('run tmux: ' + ' '.join(args), time=True)
 	with subprocess.Popen(
 		[ tmux_command ] + args,
 		shell=False,
@@ -75,6 +78,7 @@ def runtmux(args, one=False, lines=False, noblanklines=False, sendstdin=None):
 		recvstdout, _ = proc.communicate(input=sendstdin)
 		if proc.returncode != 0:
 			raise Exception(f'tmux {" ".join(args)} exited with status {proc.returncode}')
+	log('tmux returned', time=True)
 	data = recvstdout.decode('utf8')
 	if one or lines: # return list of lines
 		dlines = data.split('\n')
@@ -110,7 +114,7 @@ def fetch_tmux_options(optmode='g'):
 		name = row[:i]
 		val = row[i+1:]
 		# need to process val for quoting and backslash-escapes
-		if val[0] == '"':
+		if len(val) > 1 and val[0] == '"':
 			assert(val[-1] == '"')
 			val = val[1:-1]
 		if val.find('\\') != -1:
@@ -236,7 +240,7 @@ def swap_hidden_pane(show_hidden=None):
 	swap_count += 1
 
 def move_tmux_cursor(pos, target, gotocopy=True): # (x, y)
-	log('move cursor to: ' + str(pos))
+	log('move cursor to: ' + str(pos), time=True)
 	tmuxcmds = []
 	if gotocopy:
 		tmuxcmds.append([ 'copy-mode', '-t', target ])
@@ -327,7 +331,7 @@ class PaneJumpAction:
 
 	def __init__(self, stdscr):
 		self.stdscr = stdscr
-		log('start run easymotion internal')
+		log('start run easymotion internal', time=True)
 
 		# Fetch information about the panes and capture original contents
 		self.orig_pane = get_pane_info(args.t, capture=True)
@@ -426,6 +430,7 @@ class EasyMotionAction(PaneJumpAction):
 
 
 	def run(self):
+		log('easymotion swapping in hidden pane', time=True)
 		swap_hidden_pane(True)
 
 		# Input search string
@@ -460,11 +465,11 @@ class EasyMotionAction(PaneJumpAction):
 			if len(self.match_locations) < 2:
 				break
 			self.redraw()
-		log('keyed label: ' + keyed_label)
+		log('keyed label: ' + keyed_label, time=True)
 
 		# If a location was found, move cursor there in original pane
 		if len(self.match_locations) > 0:
-			log('match location: ' + str(self.match_locations[0]))
+			log('match location: ' + str(self.match_locations[0]), time=True)
 			move_tmux_cursor((self.match_locations[0][0], self.match_locations[0][1]), self.orig_pane['pane_id'])
 
 def run_easymotion(stdscr):
@@ -480,6 +485,7 @@ def run_easymotion(stdscr):
 
 
 def run_wrapper(main_action, args):
+	log('running wrapper', time=True)
 	pane = get_pane_info(args.t)
 	# Wrap the inner utility in different ways depending on if the pane is zoomed or not.
 	# This is because tmux does funny thingy when swapping zoomed panes.
@@ -516,6 +522,7 @@ def run_wrapper(main_action, args):
 
 	cmd += f' "{main_action}"'
 	#cmd += ' 2>/tmp/tm_wrap_log'
+	log('wrapper triggering hidden pane respawn of inner process', time=True)
 	runtmux([ 'respawn-pane', '-k', '-t', hidden_pane['pane_id_full'], cmd ])
 
 
