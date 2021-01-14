@@ -194,7 +194,7 @@ def get_pane_info(target=None, capture=False):
 
 def create_window_pane_of_size(size):
 	# Create a new window in the background
-	window_id_full = runtmux([ 'new-window', '-dP', '-F', '#{session_id}:#{window_id}', '/bin/sh' ], one=True)
+	window_id_full = runtmux([ 'new-window', '-dP', '-F', '#{session_id}:#{window_id}', '/bin/cat' ], one=True)
 	# Get the information about the new pane just created
 	pane = get_pane_info(window_id_full)
 	# If the width is greater than the target width, do a vertical split.
@@ -202,11 +202,11 @@ def create_window_pane_of_size(size):
 	tmuxcmds = []
 	resize = False
 	if pane['pane_size'][0] > size[0] + 1:
-		tmuxcmds.append([ 'split-window', '-t', pane['pane_id_full'], '-hd', '/bin/sh' ])
+		tmuxcmds.append([ 'split-window', '-t', pane['pane_id_full'], '-hd', '/bin/cat' ])
 		resize = True
 	# If too tall, do a horizontal split
 	if pane['pane_size'][1] > size[1] + 1:
-		tmuxcmds.append([ 'split-window', '-t', pane['pane_id_full'], '-vd', '/bin/sh' ])
+		tmuxcmds.append([ 'split-window', '-t', pane['pane_id_full'], '-vd', '/bin/cat' ])
 		resize = True
 	# Resize the pane to desired size
 	if resize:
@@ -504,7 +504,7 @@ def run_wrapper(main_action, args):
 	# then the active window is switched to that new window.  Once complete, the window is
 	# switched back.
 	if pane['zoomed']:
-		z_win_id = runtmux([ 'new-window', '-dP', '-F', '#{session_id}:#{window_id}', '/bin/sh' ], one=True)
+		z_win_id = runtmux([ 'new-window', '-dP', '-F', '#{session_id}:#{window_id}', '/bin/cat' ], one=True)
 		hidden_pane = get_pane_info(z_win_id)
 		swap_mode = 'window-switch'
 	else:
