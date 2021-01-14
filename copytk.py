@@ -168,13 +168,15 @@ def get_tmux_option_key_curses(name, default=None, optmode='g', aslist=False):
 	else:
 		return remap.get(v, v)
 
-def capture_pane_contents(target=None):
+def capture_pane_contents(target=None, opts=None):
 	args = [ 'capture-pane', '-p' ]
+	if opts:
+		args += [ '-' + opts ]
 	if target != None:
 		args += [ '-t', target ]
 	return runtmux(args)[:-1]
 
-def get_pane_info(target=None, capture=False):
+def get_pane_info(target=None, capture=False, capturej=False):
 	args = [ 'display-message', '-p' ]
 	if target != None:
 		args += [ '-t', target ]
@@ -201,6 +203,8 @@ def get_pane_info(target=None, capture=False):
 	}
 	if capture:
 		rdict['contents'] = capture_pane_contents(rdict['pane_id_full'])
+	if capturej:
+		rdict['contentsj'] = capture_pane_contents(rdict['pane_id_full'], 'J')
 	return rdict
 
 def create_window_pane_of_size(size):
@@ -317,16 +321,18 @@ def process_pane_capture_lines(data, nlines=None):
 		lines = lines[:nlines]
 	return lines
 
-def em_search_lines(datalines, srch, min_match_spacing=2):
-	results = [] # (x, y)
-	for linenum, line in reversed(list(enumerate(datalines))):
-		pos = 0
-		while True:
-			r = line.find(srch, pos)
-			if r == -1: break
-			results.append((r, linenum))
-			pos = r + len(srch) + min_match_spacing
-	return results
+def map_pane_pos_to_contentsj_pos(pos, contentsj, pane_size):
+	# pos is the (x, y) position in the pane
+	# contentsj is from tmux capture-pane -J (extra trailing spaces & does not include extra newlines)
+	lines = contentsj.split('\n')
+	cury = 0
+	for linenum, line in enumerate(lines):
+		curx = 0
+		# edge cases: line len is 0; line len is pane width
+		pane_lines = ( line[i:i+pane_size[0]] for i in range(0, len(line), pane_size[0]) )
+		for pl in pane_lines:
+			pass
+
 
 #n = 10000
 #ls = gen_em_labels(n, 1, 2)
@@ -504,9 +510,10 @@ class EasyMotionAction(PaneJumpAction):
 		else:
 			return locs
 
-	def _em_sort_locs_cursor_proximity(self, locs):
+	def _em_sort_locs_cursor_proximity(self, locs, cursor=None):
 		# Sort locations by proximity to cursor
-		cursor = self.orig_pane['cursor']
+		if cursor == None:
+			cursor = self.orig_pane['cursor']
 		locs.sort(key=lambda pos: abs(cursor[0] - pos[0]) + abs(cursor[1] - pos[1]) * self.orig_pane['pane_size'][0])
 
 	def _em_search_lines(self, datalines, srch, min_match_spacing=2, matchcase=False):
@@ -545,13 +552,13 @@ class EasyMotionAction(PaneJumpAction):
 		else:
 			raise Exception('Invalid copytk easymotion action')
 
-	def do_easymotion(self, action, filter_locs=None):
+	def do_easymotion(self, action, filter_locs=None, sort_close_to=None):
 		# Get possible jump locations sorted by proximity to cursor
 		locs = self.get_locations(action)
 		locs = self._em_filter_locs(locs)
 		if filter_locs:
 			locs = [ l for l in locs if filter_locs(l) ]
-		self._em_sort_locs_cursor_proximity(locs)
+		self._em_sort_locs_cursor_proximity(locs, sort_close_to)
 
 		# Assign each match a label
 		label_it = gen_em_labels(len(locs))
@@ -592,6 +599,7 @@ class EasyCopyAction(EasyMotionAction):
 
 	def __init__(self, stdscr, search_len=1):
 		super().__init__(stdscr, search_len)
+		self.orig_pane['contentsj'] = capture_pane_contents(self.orig_pane['pane_id'], 'J')
 
 	def run(self):
 		log('easycopy swapping in hidden pane', time=True)
@@ -602,7 +610,11 @@ class EasyCopyAction(EasyMotionAction):
 		self.highlight_location = pos1
 		self.reset(keep_highlight=True)
 		# restrict second search to after first position
-		pos2 = self.do_easymotion('search', filter_locs=lambda loc: loc[1] > pos1[1] or (loc[1] == pos1[1] and loc[0] > pos1[0]))
+		pos2 = self.do_easymotion(
+			'search',
+			filter_locs=lambda loc: loc[1] > pos1[1] or (loc[1] == pos1[1] and loc[0] > pos1[0]),
+			sort_close_to=pos1
+		)
 
 		# since typing last n letters of word, advance end position by n
 		pos2 = (pos2[0] + self.search_len, pos2[1])
