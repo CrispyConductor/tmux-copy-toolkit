@@ -10,6 +10,7 @@ import math
 import subprocess
 import shutil
 from datetime import datetime
+import time
 
 logdir = '/tmp/tmplog'
 
@@ -179,8 +180,14 @@ def get_pane_info(target=None, capture=False):
 		args += [ '-t', target ]
 	args += [ '#{session_id} #{window_id} #{pane_id} #{pane_width} #{pane_height} #{window_zoomed_flag} #{cursor_x} #{cursor_y} #{copy_cursor_x} #{copy_cursor_y} #{pane_mode}' ]
 	r = runtmux(args, one=True).split(' ')
-	cursorpos = (int(r[6]), int(r[7])) if r[6] != '' and r[7] != '' else (0, 0)
-	copycursorpos = (int(r[8]), int(r[9])) if r[8] != '' and r[9] != '' else (0, 0)
+	try:
+		cursorpos = (int(r[6]), int(r[7]))
+	except:
+		cursorpos = (0, 0)
+	try:
+		copycursorpos = (int(r[8]), int(r[9]))
+	except:
+		copycursorpos = (0, 0)
 	mode = r[10]
 	rdict = {
 		'session_id': r[0],
@@ -350,6 +357,7 @@ class PaneJumpAction:
 		curses.use_default_colors()
 		curses.init_pair(1, curses.COLOR_RED, -1) # color for label first char
 		curses.init_pair(2, curses.COLOR_YELLOW, -1) # color for label second+ char
+		curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_YELLOW) # color for highlight
 		self.stdscr.clear()
 
 		# Track the size as known by curses
@@ -357,16 +365,43 @@ class PaneJumpAction:
 
 		# Set the contents to display
 		self.display_content_lines = self.orig_pane['contents'].split('\n')
-
+		self.reset()
+		
+	def reset(self, keep_highlight=False):
 		# Initialize properties for later
 		self.cur_label_pos = 0 # how many label chars have been keyed in
 		self.match_locations = None # the currently valid search results [ (x, y, label) ]
+
+		# Highlighted location
+		if not keep_highlight:
+			self.highlight_location = None
+			self.highlight_range = None
 
 		# display current contents
 		log('\n'.join(self.display_content_lines), 'display_content_lines')
 		self.redraw()
 
+	def flash_highlight_range(self, hlrange, noredraw=False):
+		self.highlight_range = hlrange
+		self._redraw_contents()
+		self.stdscr.refresh()
+		delayt = float(get_tmux_option('@copytk-flash-time', '0.5'))
+		time.sleep(delayt)
+		self.highlight_range = None
+		if not noredraw:
+			self._redraw_contents()
+			self.stdscr.refresh()
+
 	def _redraw_contents(self):
+		def addstr(y, x, s, a=None):
+			if len(s) == 0: return
+			try:
+				if a == None:
+					self.stdscr.addstr(y, x, s)
+				else:
+					self.stdscr.addstr(y, x, s, a)
+			except Exception as err:
+				log(f'Error writing str to screen.  curses_size={self.curses_size} linelen={len(line)} i={i} err={str(err)}')
 		line_width = min(self.curses_size[1], self.orig_pane['pane_size'][0])
 		max_line = min(self.curses_size[0], len(self.display_content_lines))
 		for i in range(max_line):
@@ -374,10 +409,26 @@ class PaneJumpAction:
 			if i >= max_line - 1 and len(line) >= line_width:
 				# curses doesn't like writing strings to bottom-right char
 				line = line[:line_width-1]
-			try:
-				self.stdscr.addstr(i, 0, line)
-			except Exception as err:
-				log(f'Error writing str to screen.  curses_size={self.curses_size} linelen={len(line)} i={i} err={str(err)}')
+			if self.highlight_range:
+				rng = self.highlight_range
+				hlattr = curses.color_pair(3)
+				if i < rng[0][1] or i > rng[1][1]: # whole line not hl
+					addstr(i, 0, line)
+				elif i > rng[0][1] and i < rng[1][1]: # whole line hl
+					addstr(i, 0, line, hlattr)
+				elif i == rng[0][1] and i == rng[1][1]: # range starts and stops on this line
+					addstr(i, 0, line)
+					addstr(i, rng[0][0], line[rng[0][0]:rng[1][0]], hlattr)
+				elif i == rng[0][1]: # range starts on this line
+					addstr(i, 0, line[0:rng[0][0]])
+					addstr(i, rng[0][0], line[rng[0][0]:], hlattr)
+				elif i == rng[1][1]: # range ends on this line
+					addstr(i, 0, line[0:rng[1][0]], hlattr)
+					addstr(i, rng[1][0], line[rng[1][0]:])
+				else:
+					assert(False)
+			else:
+				addstr(i, 0, line)
 
 	def _redraw_labels(self):
 		line_width = min(self.curses_size[1], self.orig_pane['pane_size'][0])
@@ -392,6 +443,14 @@ class PaneJumpAction:
 	def redraw(self):
 		self._redraw_contents()
 		self._redraw_labels()
+		if self.highlight_location:
+			loc = self.highlight_location
+			if loc[0] < self.curses_size[1] and loc[1] < self.curses_size[0] and not (loc[0] == self.curses_size[1] - 1 and loc[1] == self.curses_size[0] - 1):
+				try:
+					c = self.display_content_lines[loc[1]][loc[0]]
+				except:
+					c = '['
+				self.stdscr.addch(loc[1], loc[0], c, curses.color_pair(3))
 		self.stdscr.refresh()
 
 	def cancel(self):
@@ -486,13 +545,12 @@ class EasyMotionAction(PaneJumpAction):
 		else:
 			raise Exception('Invalid copytk easymotion action')
 
-	def run(self, action):
-		log('easymotion swapping in hidden pane', time=True)
-		swap_hidden_pane(True)
-
+	def do_easymotion(self, action, filter_locs=None):
 		# Get possible jump locations sorted by proximity to cursor
 		locs = self.get_locations(action)
 		locs = self._em_filter_locs(locs)
+		if filter_locs:
+			locs = [ l for l in locs if filter_locs(l) ]
 		self._em_sort_locs_cursor_proximity(locs)
 
 		# Assign each match a label
@@ -513,10 +571,44 @@ class EasyMotionAction(PaneJumpAction):
 			self.redraw()
 		log('keyed label: ' + keyed_label, time=True)
 
+		if len(self.match_locations) == 0:
+			return None
+		else:
+			return self.match_locations[0]
+
+	def run(self, action):
+		log('easymotion swapping in hidden pane', time=True)
+		swap_hidden_pane(True)
+
+		loc = self.do_easymotion(action)
+		
 		# If a location was found, move cursor there in original pane
-		if len(self.match_locations) > 0:
-			log('match location: ' + str(self.match_locations[0]), time=True)
-			move_tmux_cursor((self.match_locations[0][0], self.match_locations[0][1]), self.orig_pane['pane_id'])
+		if loc:
+			log('match location: ' + str(loc), time=True)
+			move_tmux_cursor((loc[0], loc[1]), self.orig_pane['pane_id'])
+
+
+class EasyCopyAction(EasyMotionAction):
+
+	def __init__(self, stdscr, search_len=1):
+		super().__init__(stdscr, search_len)
+
+	def run(self):
+		log('easycopy swapping in hidden pane', time=True)
+		swap_hidden_pane(True)
+
+		# Input searches to get bounds
+		pos1 = self.do_easymotion('search')
+		self.highlight_location = pos1
+		self.reset(keep_highlight=True)
+		# restrict second search to after first position
+		pos2 = self.do_easymotion('search', filter_locs=lambda loc: loc[1] > pos1[1] or (loc[1] == pos1[1] and loc[0] > pos1[0]))
+
+		# since typing last n letters of word, advance end position by n
+		pos2 = (pos2[0] + self.search_len, pos2[1])
+
+		# Flash selected range as confirmation
+		self.flash_highlight_range((pos1, pos2))
 
 def run_easymotion(stdscr):
 	nkeys = 1
@@ -525,6 +617,11 @@ def run_easymotion(stdscr):
 	action = args.action[11:]
 	EasyMotionAction(stdscr, nkeys).run(action)
 
+def run_easycopy(stdscr):
+	nkeys = 1
+	if args.search_nkeys:
+		nkeys = int(args.search_nkeys)
+	EasyCopyAction(stdscr, nkeys).run()
 
 
 
@@ -613,6 +710,8 @@ try:
 	os.environ.setdefault('ESCDELAY', '10') # lower curses pause on escape
 	if args.action.startswith('easymotion-'):
 		curses.wrapper(run_easymotion)
+	elif args.action == 'easycopy':
+		curses.wrapper(run_easycopy)
 	else:
 		print('Invalid action')
 		exit(1)

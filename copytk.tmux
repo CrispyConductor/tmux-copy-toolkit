@@ -10,6 +10,10 @@ tmux bind-key -T copytk n run-shell -b "python3 $CURRENT_DIR/copytk.py easymotio
 tmux bind-key -T copy-mode-vi s run-shell -b "python3 $CURRENT_DIR/copytk.py easymotion-search --search-nkeys 1"
 tmux bind-key -T copy-mode s run-shell -b "python3 $CURRENT_DIR/copytk.py easymotion-search --search-nkeys 1"
 
+tmux bind-key -T copytk y run-shell -b "python3 $CURRENT_DIR/copytk.py easycopy --search-nkeys 1"
+tmux bind-key -T copytk Y run-shell -b "python3 $CURRENT_DIR/copytk.py easycopy --search-nkeys 2"
+
 tmux bind-key -T copy-mode-vi S switch-client -T copytk
 tmux bind-key -T copy-mode S switch-client -T copytk
+
 
