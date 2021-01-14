@@ -436,10 +436,59 @@ class EasyMotionAction(PaneJumpAction):
 				pos = r + len(srch) + min_match_spacing
 		return results
 
+	def _em_input_search_chars(self):
+		search_str = ''
+		for i in range(self.search_len):
+			search_str += self.getkey()
+		return search_str
 
-	def run(self):
+	def get_locations(self, action):
+		pane_search_lines = process_pane_capture_lines(self.orig_pane['contents'], self.orig_pane['pane_size'][1])
+		log('\n'.join(pane_search_lines), 'pane_search_lines')
+
+		if action == 'search':
+			search_str = self._em_input_search_chars()
+			return self._em_search_lines(
+				pane_search_lines,
+				search_str,
+				self.min_match_spacing,
+				self.case_sensitive_search == 'on' or (self.case_sensitive_search == 'upper' and search_str.lower() != search_str)
+			)
+		else:
+			raise Exception('Invalid copytk easymotion action')
+
+	def run(self, action):
 		log('easymotion swapping in hidden pane', time=True)
 		swap_hidden_pane(True)
+
+		# Get possible jump locations
+		locs = self.get_locations(action)
+
+		# Assign each match a label
+		label_it = gen_em_labels(len(locs))
+		self.match_locations = [ (ml[0], ml[1], next(label_it) ) for ml in locs ]
+
+		# Draw labels
+		self.redraw()
+
+		# Wait for label presses
+		keyed_label = ''
+		while True: # loop over each key/char in the label
+			keyed_label += self.getkey()
+			self.cur_label_pos += 1
+			self.match_locations = [ m for m in self.match_locations if m[2].startswith(keyed_label) ]
+			if len(self.match_locations) < 2:
+				break
+			self.redraw()
+		log('keyed label: ' + keyed_label, time=True)
+
+		# If a location was found, move cursor there in original pane
+		if len(self.match_locations) > 0:
+			log('match location: ' + str(self.match_locations[0]), time=True)
+			move_tmux_cursor((self.match_locations[0][0], self.match_locations[0][1]), self.orig_pane['pane_id'])
+		return
+
+
 
 		# Input search string
 		search_str = ''
@@ -484,7 +533,8 @@ def run_easymotion(stdscr):
 	nkeys = 1
 	if args.search_nkeys:
 		nkeys = int(args.search_nkeys)
-	EasyMotionAction(stdscr, nkeys).run()
+	action = args.action[11:]
+	EasyMotionAction(stdscr, nkeys).run(action)
 
 
 
@@ -569,7 +619,7 @@ assert(args.swap_mode)
 try:
 
 	os.environ.setdefault('ESCDELAY', '10') # lower curses pause on escape
-	if args.action == 'easymotion':
+	if args.action.startswith('easymotion-'):
 		curses.wrapper(run_easymotion)
 	else:
 		print('Invalid action')
