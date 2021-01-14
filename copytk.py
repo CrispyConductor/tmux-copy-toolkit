@@ -177,8 +177,11 @@ def get_pane_info(target=None, capture=False):
 	args = [ 'display-message', '-p' ]
 	if target != None:
 		args += [ '-t', target ]
-	args += [ '#{session_id} #{window_id} #{pane_id} #{pane_width} #{pane_height} #{window_zoomed_flag}' ]
+	args += [ '#{session_id} #{window_id} #{pane_id} #{pane_width} #{pane_height} #{window_zoomed_flag} #{cursor_x} #{cursor_y} #{copy_cursor_x} #{copy_cursor_y} #{pane_mode}' ]
 	r = runtmux(args, one=True).split(' ')
+	cursorpos = (int(r[6]), int(r[7])) if r[6] != '' and r[7] != '' else (0, 0)
+	copycursorpos = (int(r[8]), int(r[9])) if r[8] != '' and r[9] != '' else (0, 0)
+	mode = r[10]
 	rdict = {
 		'session_id': r[0],
 		'window_id': r[1],
@@ -186,7 +189,8 @@ def get_pane_info(target=None, capture=False):
 		'pane_id': r[2],
 		'pane_id_full': r[0] + ':' + r[1] + '.' + r[2],
 		'pane_size': (int(r[3]), int(r[4])),
-		'zoomed': bool(int(r[5]))
+		'zoomed': bool(int(r[5])),
+		'cursor': copycursorpos if mode == 'copy-mode' else cursorpos
 	}
 	if capture:
 		rdict['contents'] = capture_pane_contents(rdict['pane_id_full'])
@@ -423,6 +427,29 @@ class EasyMotionAction(PaneJumpAction):
 		self.case_sensitive_search = get_tmux_option('@copytk-case-sensitive-search', 'upper') # value values: on, off, upper
 		self.min_match_spacing = int(get_tmux_option('@copytk-min-match-spacing', '2'))
 
+	def _em_filter_locs(self, locs):
+		d = args.search_direction
+		cursor = self.orig_pane['cursor']
+		if d == 'forward' or d == 'down':
+			return [
+				loc
+				for loc in locs
+				if loc[1] > cursor[1] or (loc[1] == cursor[1] and loc[0] >= cursor[0])
+			]
+		elif d == 'reverse' or d == 'up' or d == 'backward':
+			return [
+				loc
+				for loc in locs
+				if loc[1] < cursor[1] or (loc[1] == cursor[1] and loc[0] < cursor[0])
+			]
+		else:
+			return locs
+
+	def _em_sort_locs_cursor_proximity(self, locs):
+		# Sort locations by proximity to cursor
+		cursor = self.orig_pane['cursor']
+		locs.sort(key=lambda pos: abs(cursor[0] - pos[0]) + abs(cursor[1] - pos[1]) * self.orig_pane['pane_size'][0])
+
 	def _em_search_lines(self, datalines, srch, min_match_spacing=2, matchcase=False):
 		if not matchcase: srch = srch.lower()
 		results = [] # (x, y)
@@ -454,6 +481,8 @@ class EasyMotionAction(PaneJumpAction):
 				self.min_match_spacing,
 				self.case_sensitive_search == 'on' or (self.case_sensitive_search == 'upper' and search_str.lower() != search_str)
 			)
+		elif action == 'lines':
+			return [ (0, y) for y in range(self.orig_pane['pane_size'][1]) ]
 		else:
 			raise Exception('Invalid copytk easymotion action')
 
@@ -461,8 +490,10 @@ class EasyMotionAction(PaneJumpAction):
 		log('easymotion swapping in hidden pane', time=True)
 		swap_hidden_pane(True)
 
-		# Get possible jump locations
+		# Get possible jump locations sorted by proximity to cursor
 		locs = self.get_locations(action)
+		locs = self._em_filter_locs(locs)
+		self._em_sort_locs_cursor_proximity(locs)
 
 		# Assign each match a label
 		label_it = gen_em_labels(len(locs))
@@ -476,48 +507,6 @@ class EasyMotionAction(PaneJumpAction):
 		while True: # loop over each key/char in the label
 			keyed_label += self.getkey()
 			self.cur_label_pos += 1
-			self.match_locations = [ m for m in self.match_locations if m[2].startswith(keyed_label) ]
-			if len(self.match_locations) < 2:
-				break
-			self.redraw()
-		log('keyed label: ' + keyed_label, time=True)
-
-		# If a location was found, move cursor there in original pane
-		if len(self.match_locations) > 0:
-			log('match location: ' + str(self.match_locations[0]), time=True)
-			move_tmux_cursor((self.match_locations[0][0], self.match_locations[0][1]), self.orig_pane['pane_id'])
-		return
-
-
-
-		# Input search string
-		search_str = ''
-		for i in range(self.search_len):
-			search_str += self.getkey()
-
-		# Find occurrences of search string in pane contents
-		pane_search_lines = process_pane_capture_lines(self.orig_pane['contents'], self.orig_pane['pane_size'][1])
-		log('\n'.join(pane_search_lines), 'pane_search_lines')
-		match_locations = self._em_search_lines(
-			pane_search_lines,
-			search_str,
-			self.min_match_spacing,
-			self.case_sensitive_search == 'on' or (self.case_sensitive_search == 'upper' and search_str.lower() != search_str)
-		)
-
-		# Assign each match a label
-		label_it = gen_em_labels(len(match_locations))
-		self.match_locations = [ (ml[0], ml[1], next(label_it) ) for ml in match_locations ]
-
-		# Draw labels
-		self.redraw()
-
-		# Wait for label presses
-		keyed_label = ''
-		while True: # loop over each key/char in the label
-			keyed_label += self.getkey()
-			self.cur_label_pos += 1
-			# TODO: case sensitivity stuff
 			self.match_locations = [ m for m in self.match_locations if m[2].startswith(keyed_label) ]
 			if len(self.match_locations) < 2:
 				break
@@ -577,6 +566,8 @@ def run_wrapper(main_action, args):
 
 	if args.search_nkeys:
 		addopt('--search-nkeys', args.search_nkeys)
+	if args.search_direction:
+		addopt('--search-direction', args.search_direction)
 
 	cmd += f' "{main_action}"'
 	#cmd += ' 2>/tmp/tm_wrap_log'
@@ -591,6 +582,7 @@ def run_wrapper(main_action, args):
 argp = argparse.ArgumentParser(description='tmux pane utils')
 argp.add_argument('-t', help='target pane')
 argp.add_argument('--search-nkeys', help='number of characters to key in to search')
+argp.add_argument('--search-direction', help='direction to search from cursor, both|forward|reverse')
 
 # internal args
 argp.add_argument('--run-internal', action='store_true')
