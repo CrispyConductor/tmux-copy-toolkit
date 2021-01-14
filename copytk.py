@@ -321,6 +321,88 @@ def process_pane_capture_lines(data, nlines=None):
 		lines = lines[:nlines]
 	return lines
 
+def process_pane_capture_line(line):
+	return ''.join([
+		'        ' if c == '\t' else (
+			c if c.isprintable() else ''
+		)
+		for c in line
+	])
+
+# Convert a capture-pane -J output (joined/wrapped lines) into a list of display lines
+def process_capturej(capturej, size):
+	# capturej is about as close to the raw data in the terminal as we can get, but tmux
+	# sometimes adds trailing spaces, so rstrip everything
+	capturej = '\n'.join(( line.rstrip() for line in capturej.split('\n') ))
+
+	# this becomes a list of strings, each corresponding to a display line
+	display_lines = []
+	# this becomes a string containing processed capturej output (the data to copy from)
+	capturej_processed = ''
+	# this is a mapping from the (x, y) position in display_lines to the string index into capturej_processed
+	pos_map = {}
+	# state
+	cur_dline = ''
+	# Process capturej one char at a time
+	for cidx, c in enumerate(capturej):
+		if c == '\n':
+			# map any implicit blanks at the end of the last line
+			for i in range(len(cur_dline), size[0]):
+				pos_map[(i, len(display_lines))] = len(capturej_processed)
+			# map newline to character beyond end of current line
+			pos_map[(size[0], len(display_lines))] = len(capturej_processed)
+			display_lines.append(cur_dline)
+			cur_dline = ''
+			capturej_processed += c
+		elif c == '\t':
+			# tab stored literally in capture data but converted to spaces for display and indexing
+			tab_len = 8
+			if len(cur_dline) >= size[0]:
+				display_lines.append(cur_dline)
+				cur_dline = ''
+			elif len(cur_dline) + tab_len > size[0]:
+				tab_len = size[0] - len(cur_dline)
+			pos_map[(len(cur_dline), len(display_lines))] = len(capturej_processed)
+			cur_dline += ''.join(( ' ' for i in range(tab_len) ))
+			capturej_processed += c
+		elif not c.isprintable():
+			# included in capture data for copying but not displayed
+			capturej_processed += c
+		else:
+			# normal character
+			if len(cur_dline) >= size[0]:
+				display_lines.append(cur_dline)
+				cur_dline = ''
+			pos_map[(len(cur_dline), len(display_lines))] = len(capturej_processed)
+			cur_dline += c
+			capturej_processed += c
+	display_lines.append(cur_dline)
+	if len(display_lines) > size[1]:
+		display_lines = display_lines[:size[1]]
+	return display_lines, capturej_processed, pos_map
+
+
+	# maintain a mapping from display line number to the corresponding string index in capturej
+#	display_line_pos_map = []
+#	for j, jline in enumerate(capturej.split('\n')):
+#		if len(jline) == 0:
+#			display_lines.append('')
+#			display_line_pos_map.append((j, 0))
+#		else:
+#			jline = process_pane_capture_line(jline)
+#			for i in range(0, len(jline), size[0]):
+#				dline = jline[i:i+size[0]]
+#				# tmux sometimes adds extra trailing spaces in capture
+#				if i + size[0] >= len(jline): # last iteration
+#					dline = dline.rstrip()
+#				display_lines.append(dline)
+#				display_line_pos_map.append((j, i))
+#	if len(display_lines) > size[1]:
+#		display_lines = display_lines[:size[1]]
+#		display_line_pos_map = display_line_pos_map[:size[1]]
+#	return display_lines, display_line_pos_map
+	
+
 def map_pane_pos_to_contentsj_pos(pos, contentsj, pane_size):
 	# pos is the (x, y) position in the pane
 	# contentsj is from tmux capture-pane -J (extra trailing spaces & does not include extra newlines)
@@ -351,7 +433,7 @@ class PaneJumpAction:
 		log('start run easymotion internal', time=True)
 
 		# Fetch information about the panes and capture original contents
-		self.orig_pane = get_pane_info(args.t, capture=True)
+		self.orig_pane = get_pane_info(args.t, capturej=True)
 		self.overlay_pane = get_pane_info(args.hidden_t)
 
 		# Fetch options
@@ -370,7 +452,8 @@ class PaneJumpAction:
 		self.curses_size = stdscr.getmaxyx() # note: in (y,x) not (x,y)
 
 		# Set the contents to display
-		self.display_content_lines = self.orig_pane['contents'].split('\n')
+		capture_info = process_capturej(self.orig_pane['contentsj'], self.orig_pane['pane_size'])
+		self.display_content_lines = capture_info[0]
 		self.reset()
 		
 	def reset(self, keep_highlight=False):
@@ -442,7 +525,8 @@ class PaneJumpAction:
 			for col, row, label in self.match_locations:
 				if col + len(label) > line_width:
 					label = label[:line_width - col]
-				self.stdscr.addstr(row, col, label[self.cur_label_pos], curses.color_pair(1))
+				if len(label) > self.cur_label_pos:
+					self.stdscr.addstr(row, col, label[self.cur_label_pos], curses.color_pair(1))
 				if len(label) > self.cur_label_pos + 1:
 					self.stdscr.addstr(row, col+1, label[self.cur_label_pos+1:], curses.color_pair(2))
 
@@ -536,7 +620,8 @@ class EasyMotionAction(PaneJumpAction):
 		return search_str
 
 	def get_locations(self, action):
-		pane_search_lines = process_pane_capture_lines(self.orig_pane['contents'], self.orig_pane['pane_size'][1])
+		#pane_search_lines = process_pane_capture_lines(self.orig_pane['contents'], self.orig_pane['pane_size'][1])
+		pane_search_lines = self.display_content_lines
 		log('\n'.join(pane_search_lines), 'pane_search_lines')
 
 		if action == 'search':
@@ -599,7 +684,7 @@ class EasyCopyAction(EasyMotionAction):
 
 	def __init__(self, stdscr, search_len=1):
 		super().__init__(stdscr, search_len)
-		self.orig_pane['contentsj'] = capture_pane_contents(self.orig_pane['pane_id'], 'J')
+		#self.orig_pane['contentsj'] = capture_pane_contents(self.orig_pane['pane_id'], 'J')
 
 	def run(self):
 		log('easycopy swapping in hidden pane', time=True)
