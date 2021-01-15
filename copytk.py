@@ -272,8 +272,6 @@ def cleanup_internal_process():
 		swap_hidden_pane()
 	runtmux([ 'kill-window', '-t', args.hidden_window ])
 
-
-
 def gen_em_labels(n, min_nchars=1, max_nchars=None):
 	# Generates easy-motion letter abbreviation sequences
 	all_chars = 'asdghklqwertyuiopzxcvbnmfj;'
@@ -330,10 +328,15 @@ def process_pane_capture_line(line):
 	])
 
 # Convert a capture-pane -J output (joined/wrapped lines) into a list of display lines
-def process_capturej(capturej, size):
+# Uses hints from captureplain to make display lines line up
+def process_capturej(capturej, size, captureplain=None):
 	# capturej is about as close to the raw data in the terminal as we can get, but tmux
 	# sometimes adds trailing spaces, so rstrip everything
+	log(capturej, 'capj_pre_strip')
 	capturej = '\n'.join(( line.rstrip() for line in capturej.split('\n') ))
+	log(capturej, 'capj')
+	log(captureplain, 'capp')
+	log('psize ' + str(size))
 
 	# this becomes a list of strings, each corresponding to a display line
 	display_lines = []
@@ -343,6 +346,9 @@ def process_capturej(capturej, size):
 	pos_map = {}
 	# state
 	cur_dline = ''
+	cpidx = 0
+	# force processing last dline
+	capturej += '\n'
 	# Process capturej one char at a time
 	for cidx, c in enumerate(capturej):
 		if c == '\n':
@@ -354,6 +360,19 @@ def process_capturej(capturej, size):
 			display_lines.append(cur_dline)
 			cur_dline = ''
 			capturej_processed += c
+			# expect plain capture to also have a newline here, but also allow trailing spaces first
+			if captureplain and cpidx < len(captureplain):
+				if captureplain[cpidx] == '\n':
+					cpidx += 1
+				else:
+					# plain capture data did not match expected; allow for extra spaces, then ignore hints
+					while cpidx < len(captureplain) and captureplain[cpidx] == ' ':
+						cpidx += 1
+					if captureplain[cpidx] == '\n':
+						cpidx + 1
+					else:
+						log('Got captureplain mismatch C ' + str(len(display_lines)))
+						captureplain = None
 		elif c == '\t':
 			# tab stored literally in capture data but converted to spaces for display and indexing
 			tab_len = 8
@@ -365,18 +384,54 @@ def process_capturej(capturej, size):
 			pos_map[(len(cur_dline), len(display_lines))] = len(capturej_processed)
 			cur_dline += ''.join(( ' ' for i in range(tab_len) ))
 			capturej_processed += c
+			# advance cpidx
+			if captureplain and cpidx < len(captureplain):
+				if captureplain[cpidx] == '\t':
+					cpidx += 1
+				else:
+					for i in range(tab_len):
+						if cpidx < len(captureplain) and captureplain[cpidx] == ' ':
+							cpidx += 1
 		elif not c.isprintable():
-			# included in capture data for copying but not displayed
+			# included in capture data for copying but not displayed; should not be in captureplain at all but check
 			capturej_processed += c
+			if captureplain and cpidx < len(captureplain) and captureplain[cpidx] == c:
+				cpidx += 1
 		else:
 			# normal character
 			if len(cur_dline) >= size[0]:
 				display_lines.append(cur_dline)
 				cur_dline = ''
+				# expect the plain capture data to also have a newline here
+				if captureplain and cpidx < len(captureplain):
+					if captureplain[cpidx] == '\n':
+						cpidx += 1
+					else:
+						# plain capture data did not match expected; allow for extra spaces, then ignore hints
+						while cpidx < len(captureplain) and captureplain[cpidx] == ' ':
+							cpidx += 1
+						if captureplain[cpidx] == '\n':
+							cpidx + 1
+						else:
+							log('Got captureplain mismatch A ' + str(len(display_lines)))
+							captureplain = None
+			# expect captureplain char to match
+			if not captureplain or cpidx >= len(captureplain) or captureplain[cpidx] == c:
+				pass # matches as expected, or no hints
+			elif captureplain[cpidx] == '\n':
+				# plain capture has an extra wrap in it
+				if c != ' ':
+					display_lines.append(cur_dline)
+					cur_dline = ''
+					cpidx += 1
+			else:
+				log('Got captureplain mismatch B ' + str(len(display_lines)))
+				captureplain = None
 			pos_map[(len(cur_dline), len(display_lines))] = len(capturej_processed)
 			cur_dline += c
 			capturej_processed += c
-	display_lines.append(cur_dline)
+			cpidx += 1
+
 	if len(display_lines) > size[1]:
 		display_lines = display_lines[:size[1]]
 	return display_lines, capturej_processed, pos_map
@@ -401,7 +456,73 @@ def process_capturej(capturej, size):
 #		display_lines = display_lines[:size[1]]
 #		display_line_pos_map = display_line_pos_map[:size[1]]
 #	return display_lines, display_line_pos_map
-	
+
+
+# Aligns display capture data to actual data that doesn't include wraps.
+# Returns a dict mapping each (x, y) in disp_data to an index in j_data.
+# If alignment fails, returns None.
+def align_capture_data(disp_data, j_data, size):
+	jidx = 0
+	didx = 0
+	charmap = {} # map from index in disp_data to index in j_data
+	while didx < len(disp_data):
+		if jidx >= len(j_data):
+			charmap[didx] = len(j_data) - 1
+			didx += 1
+			continue
+		jc = j_data[jidx]
+		dc = disp_data[didx]
+		if jc == dc: # usual case - characters match
+			charmap[didx] = jidx
+			didx += 1
+			jidx += 1
+		elif dc == '\t' and jc == ' ':
+			for i in range(8):
+				if jidx < len(j_data) and j_data[jidx] == ' ':
+					jidx += 1
+				else:
+					break
+		elif jc == '\t' and dc == ' ':
+			for i in range(8):
+				if didx < len(disp_data) and disp_data[didx] == ' ':
+					charmap[didx] = jidx
+					didx += 1
+				else:
+					break
+		elif dc == '\n' or dc == ' ' or dc == '\t':
+			charmap[didx] = max(jidx - 1, 0)
+			didx += 1
+		elif jc == ' ' or jc == '\t':
+			jidx += 1
+		else:
+			return None
+	# Convert character mapping to mapping indexed by disp_data (x, y)
+	xymap = {
+		xy : charmap.get(didx, 0)
+		for xy, didx in get_data_xy_idx_map(disp_data, size).items()
+	}
+
+	return xymap, charmap
+
+def get_data_xy_idx_map(data, size):
+	xymap = {}
+	didx = 0
+	for lineno in range(size[1]):
+		lineended = False
+		for col in range(size[0]):
+			if didx >= len(data):
+				xymap[(col, lineno)] = max(len(data) - 1, 0)
+				continue
+			dc = data[didx]
+			if lineended or dc == '\n':
+				lineended = True
+				xymap[(col, lineno)] = max(didx - 1, 0)
+			else:
+				xymap[(col, lineno)] = didx if didx < len(data) else len(data) - 1
+				didx += 1
+		if didx < len(data) and data[didx] == '\n':
+			didx += 1
+	return xymap
 
 def map_pane_pos_to_contentsj_pos(pos, contentsj, pane_size):
 	# pos is the (x, y) position in the pane
@@ -433,8 +554,23 @@ class PaneJumpAction:
 		log('start run easymotion internal', time=True)
 
 		# Fetch information about the panes and capture original contents
-		self.orig_pane = get_pane_info(args.t, capturej=True)
+		self.orig_pane = get_pane_info(args.t, capture=True, capturej=True)
 		self.overlay_pane = get_pane_info(args.hidden_t)
+
+		# Sanitize the J capture data by removing trailing spaces on each line
+		self.copy_data = '\n'.join(( line.rstrip() for line in self.orig_pane['contentsj'].split('\n') ))
+
+		# Create a mapping from display coordinates to indexes into the copy data
+		aligninfo = align_capture_data(self.orig_pane['contents'], self.copy_data, self.orig_pane['pane_size'])
+		if aligninfo == None:
+			log('alignment failed')
+			# TODO: Remove exception, allow fallback
+			raise Exception('alignment failed')
+			# Fall back to just mapping the display data to itself
+			self.copy_data = self.orig_pane['contents']
+			self.disp_copy_map = get_data_xy_idx_map(self.copy_data, self.orig_pane['pane_size'])
+		else:
+			self.disp_copy_map = aligninfo[0]
 
 		# Fetch options
 		self.cancel_keys = get_tmux_option_key_curses('@copytk-cancel-key', default='Escape Enter ^C', aslist=True)
@@ -452,8 +588,9 @@ class PaneJumpAction:
 		self.curses_size = stdscr.getmaxyx() # note: in (y,x) not (x,y)
 
 		# Set the contents to display
-		capture_info = process_capturej(self.orig_pane['contentsj'], self.orig_pane['pane_size'])
-		self.display_content_lines = capture_info[0]
+		#capture_info = process_capturej(self.orig_pane['contentsj'], self.orig_pane['pane_size'], self.orig_pane['contents'])
+		#self.display_content_lines = capture_info[0]
+		self.display_content_lines = process_pane_capture_lines(self.orig_pane['contents'], self.orig_pane['pane_size'][1])
 		self.reset()
 		
 	def reset(self, keep_highlight=False):
@@ -464,7 +601,7 @@ class PaneJumpAction:
 		# Highlighted location
 		if not keep_highlight:
 			self.highlight_location = None
-			self.highlight_range = None
+			self.highlight_range = None # range is inclusive
 
 		# display current contents
 		log('\n'.join(self.display_content_lines), 'display_content_lines')
@@ -474,7 +611,7 @@ class PaneJumpAction:
 		self.highlight_range = hlrange
 		self._redraw_contents()
 		self.stdscr.refresh()
-		delayt = float(get_tmux_option('@copytk-flash-time', '0.5'))
+		delayt = float(get_tmux_option('@copytk-flash-time', '1.5'))
 		time.sleep(delayt)
 		self.highlight_range = None
 		if not noredraw:
@@ -507,13 +644,13 @@ class PaneJumpAction:
 					addstr(i, 0, line, hlattr)
 				elif i == rng[0][1] and i == rng[1][1]: # range starts and stops on this line
 					addstr(i, 0, line)
-					addstr(i, rng[0][0], line[rng[0][0]:rng[1][0]], hlattr)
+					addstr(i, rng[0][0], line[rng[0][0]:rng[1][0]+1], hlattr)
 				elif i == rng[0][1]: # range starts on this line
 					addstr(i, 0, line[0:rng[0][0]])
 					addstr(i, rng[0][0], line[rng[0][0]:], hlattr)
 				elif i == rng[1][1]: # range ends on this line
-					addstr(i, 0, line[0:rng[1][0]], hlattr)
-					addstr(i, rng[1][0], line[rng[1][0]:])
+					addstr(i, 0, line[0:rng[1][0]+1], hlattr)
+					addstr(i, rng[1][0]+1, line[rng[1][0]+1:])
 				else:
 					assert(False)
 			else:
@@ -526,9 +663,15 @@ class PaneJumpAction:
 				if col + len(label) > line_width:
 					label = label[:line_width - col]
 				if len(label) > self.cur_label_pos:
-					self.stdscr.addstr(row, col, label[self.cur_label_pos], curses.color_pair(1))
+					try:
+						self.stdscr.addstr(row, col, label[self.cur_label_pos], curses.color_pair(1))
+					except Exception as err:
+						log(f'Error writing str to screen.  curses_size={self.curses_size} linelen={len(line)} i={i} err={str(err)}')
 				if len(label) > self.cur_label_pos + 1:
-					self.stdscr.addstr(row, col+1, label[self.cur_label_pos+1:], curses.color_pair(2))
+					try:
+						self.stdscr.addstr(row, col+1, label[self.cur_label_pos+1:], curses.color_pair(2))
+					except Exception as err:
+						log(f'Error writing str to screen.  curses_size={self.curses_size} linelen={len(line)} i={i} err={str(err)}')
 
 	def redraw(self):
 		self._redraw_contents()
@@ -666,7 +809,7 @@ class EasyMotionAction(PaneJumpAction):
 		if len(self.match_locations) == 0:
 			return None
 		else:
-			return self.match_locations[0]
+			return (self.match_locations[0][0], self.match_locations[0][1])
 
 	def run(self, action):
 		log('easymotion swapping in hidden pane', time=True)
@@ -701,11 +844,18 @@ class EasyCopyAction(EasyMotionAction):
 			sort_close_to=pos1
 		)
 
-		# since typing last n letters of word, advance end position by n
-		pos2 = (pos2[0] + self.search_len, pos2[1])
+		# since typing last n letters of word, advance end position by n-1
+		pos2 = (pos2[0] + self.search_len - 1, pos2[1])
 
 		# Flash selected range as confirmation
 		self.flash_highlight_range((pos1, pos2))
+
+		# TODO: Make sure this allows copying to last char on screen
+
+		a = self.disp_copy_map[pos1]
+		b = self.disp_copy_map[pos2]
+		r = self.copy_data[a:b+1]
+		log(f'copied: {pos1}->{a} {pos2}->{b} {r}')
 
 def run_easymotion(stdscr):
 	nkeys = 1
