@@ -471,6 +471,7 @@ class PaneJumpAction:
 		curses.init_pair(1, curses.COLOR_RED, -1) # color for label first char
 		curses.init_pair(2, curses.COLOR_YELLOW, -1) # color for label second+ char
 		curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_YELLOW) # color for highlight
+		curses.init_pair(4, curses.COLOR_RED, -1)
 		self.stdscr.clear()
 
 		# Track the size as known by curses
@@ -484,6 +485,7 @@ class PaneJumpAction:
 		# Initialize properties for later
 		self.cur_label_pos = 0 # how many label chars have been keyed in
 		self.match_locations = None # the currently valid search results [ (x, y, label) ]
+		self.status_msg = None # Message in bottom-right of screen
 
 		# Highlighted location
 		if not keep_highlight:
@@ -563,6 +565,7 @@ class PaneJumpAction:
 	def redraw(self):
 		self._redraw_contents()
 		self._redraw_labels()
+		# highlight
 		if self.highlight_location:
 			loc = self.highlight_location
 			if loc[0] < self.curses_size[1] and loc[1] < self.curses_size[0] and not (loc[0] == self.curses_size[1] - 1 and loc[1] == self.curses_size[0] - 1):
@@ -571,7 +574,17 @@ class PaneJumpAction:
 				except:
 					c = '['
 				self.stdscr.addch(loc[1], loc[0], c, curses.color_pair(3))
+		# status message
+		if self.status_msg:
+			try:
+				self.stdscr.addstr(self.curses_size[0] - 1, self.curses_size[1] - len(self.status_msg), self.status_msg, curses.color_pair(4))
+			except:
+				pass
+		# refresh
 		self.stdscr.refresh()
+
+	def setstatus(self, msg):
+		self.status_msg = msg
 
 	def cancel(self):
 		raise ActionCanceled()
@@ -645,8 +658,12 @@ class EasyMotionAction(PaneJumpAction):
 
 	def _em_input_search_chars(self):
 		search_str = ''
+		self.setstatus('INPUT CHAR')
+		self.redraw()
 		for i in range(self.search_len):
 			search_str += self.getkey()
+		self.setstatus(None)
+		self.redraw()
 		return search_str
 
 	def get_locations(self, action):
