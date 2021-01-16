@@ -591,6 +591,7 @@ class PaneJumpAction:
 
 	def _redraw_highlight_ranges(self):
 		if not self.highlight_ranges: return
+		line_width = min(self.curses_size[1], self.orig_pane['pane_size'][0])
 		hlattr = curses.color_pair(3)
 		for rng in self.highlight_ranges:
 			log('Drawing hl range: ' + str(rng))
@@ -599,11 +600,11 @@ class PaneJumpAction:
 				if i < rng[0][1] or i > rng[1][1]: # whole line not hl
 					continue
 				elif i > rng[0][1] and i < rng[1][1]: # whole line hl
-					self.addstr(i, 0, line, hlattr)
+					self.addstr(i, 0, line.ljust(line_width), hlattr)
 				elif i == rng[0][1] and i == rng[1][1]: # range starts and stops on this line
 					self.addstr(i, rng[0][0], line[rng[0][0]:rng[1][0]+1], hlattr)
 				elif i == rng[0][1]: # range starts on this line
-					self.addstr(i, rng[0][0], line[rng[0][0]:], hlattr)
+					self.addstr(i, rng[0][0], line.ljust(line_width)[rng[0][0]:], hlattr)
 				elif i == rng[1][1]: # range ends on this line
 					self.addstr(i, 0, line[0:rng[1][0]+1], hlattr)
 				else:
@@ -1030,7 +1031,7 @@ class QuickCopyAction(PaneJumpAction):
 		for batch in batches:
 			selected = self.run_batch(batch)
 			if selected: break
-		if not selected: return
+		if not selected: raise ActionCanceled()
 
 		# Got result.  Do copy.
 		selected_data = selected[0][2]
