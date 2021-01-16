@@ -886,21 +886,33 @@ class QuickCopyAction(PaneJumpAction):
 		min_match_len = get_tmux_option('@copytk-quickcopy-min-match-len', 4)
 		return [ m for m in allmatches if m[1] >= min_match_len ]
 
-	def arrange_matches(self, matches):
-		# TODO: Add pack tiers option (default true) so force splitting tiers into separate batches
+	def arrange_matches(self, matches, pack_tiers=True):
 		# Arrange the set of matches into batches of non-overlapping ones, by tier, and by shortness (shorter preferred)
 		# Do this by "writing" each match's range onto a virtual screen, marking each char, and pushing overlapping ones
 		# to the next batch.
+		# Sort tuples (first by tier then length)
 		matches.sort()
+		# Dedup matches
+		c_match_set = set()
+		newmatches = []
+		for match in matches:
+			if match[3] not in c_match_set:
+				c_match_set.add(match[3])
+				newmatches.append(match)
+		matches = newmatches
+		# Segment into batches by overlap
 		batches = []
 		log('start arrange_matches')
 		while len(matches) > 0: # iterate over batches
 			#log('MATCHES:')
 			#log(str(matches))
+			last_added_tier = None
 			overlaps = []
 			virt = [ False ] * len(self.copy_data)
 			batch = []
 			for m in matches: # iterate over remaining matches
+				if not pack_tiers and last_added_tier != None and m[0] != last_added_tier:
+					break
 				# Check if overlaps
 				o = False
 				for i in range(m[3][0], m[3][1]):
@@ -913,6 +925,7 @@ class QuickCopyAction(PaneJumpAction):
 					batch.append(m)
 					for i in range(m[3][0], m[3][1]):
 						virt[i] = True
+					last_added_tier = m[0]
 			batches.append(batch)
 			matches = overlaps
 		return batches
@@ -924,6 +937,7 @@ class QuickCopyAction(PaneJumpAction):
 		log('got matches')
 
 		# Group them into display batches
+		pack_tiers = get_tmux_option('@copytk-quickcopy-pack-tiers', 'on') in ( 'on', 'true', 'yes', '1' )
 		batches = self.arrange_matches(matches)
 		log('arranged matches')
 
@@ -934,9 +948,15 @@ class QuickCopyAction(PaneJumpAction):
 		for batch in batches:
 			# Assign a code to each match in the batch
 			labels = []
-			for l in gen_em_labels(len(batch), self.em_label_chars):
-				labels.append(l)
-				if len(labels) >= len(batch): break
+			match_text_label_map = {} # use this so matches with same text have same label
+			label_it = gen_em_labels(len(batch), self.em_label_chars)
+			for match in batch:
+				if match[2] in match_text_label_map:
+					labels.append(match_text_label_map[match[2]])
+				else:
+					l = next(label_it)
+					labels.append(l)
+					match_text_label_map[match[2]] = l
 			# Set up match_locations and highlights
 			self.match_locations = [ ( match[4][0], match[4][1], labels[i] ) for i, match in enumerate(batch) ]
 			line_width = self.orig_pane['pane_size'][0]
@@ -949,7 +969,7 @@ class QuickCopyAction(PaneJumpAction):
 			]
 			self.redraw()
 			time.sleep(5)
-			return
+			self.reset()
 
 def run_easymotion(stdscr):
 	nkeys = 1
