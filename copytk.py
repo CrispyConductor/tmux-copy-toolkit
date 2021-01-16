@@ -790,6 +790,7 @@ class EasyCopyAction(EasyMotionAction):
 
 		# Input searches to get bounds
 		pos1 = self.do_easymotion('search')
+		if not pos1: return
 		self.highlight_location = pos1
 		self.reset(keep_highlight=True)
 		# restrict second search to after first position
@@ -798,6 +799,7 @@ class EasyCopyAction(EasyMotionAction):
 			filter_locs=lambda loc: loc[1] > pos1[1] or (loc[1] == pos1[1] and loc[0] > pos1[0]),
 			sort_close_to=pos1
 		)
+		if not pos2: return
 
 		# since typing last n letters of word, advance end position by n-1 (-1 because range is inclusive)
 		pos2 = (pos2[0] + self.search_len - 1, pos2[1])
