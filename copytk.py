@@ -182,6 +182,9 @@ def get_tmux_option(name, default=None, optmode='g', aslist=False, userlist=Fals
 	else:
 		return opts.get(name, default)
 
+def str2bool(s):
+	return str(s).lower() not in ( '', 'off', 'no', 'false', '0' )
+
 def get_tmux_option_key_curses(name, default=None, optmode='g', aslist=False):
 	remap = {
 		'Escape': '\x1b',
@@ -546,15 +549,25 @@ class PaneJumpAction:
 		log('\n'.join(self.display_content_lines), 'display_content_lines')
 		self.redraw()
 
-	def flash_highlight_range(self, hlrange, noredraw=False):
+	def flash_highlight_range(self, hlrange, noredraw=False, preflash=False):
 		if not self.highlight_ranges:
 			self.highlight_ranges = []
-		self.highlight_ranges.append(hlrange)
+		if preflash:
+			delayt = float(get_tmux_option('@copytk-preflash-time', '0.05'))
+			self.redraw()
+			time.sleep(delayt)
+		if isinstance(hlrange, list):
+			self.highlight_ranges.extend(hlrange)
+		else:
+			self.highlight_ranges.append(hlrange)
 		self._redraw_highlight_ranges()
 		self.stdscr.refresh()
-		delayt = float(get_tmux_option('@copytk-flash-time', '0.6'))
+		delayt = float(get_tmux_option('@copytk-flash-time', '0.5'))
 		time.sleep(delayt)
-		self.highlight_ranges.pop()
+		if isinstance(hlrange, list):
+			self.highlight_ranges = self.highlight_ranges[:-len(hlrange)]
+		else:
+			self.highlight_ranges.pop()
 		if not noredraw:
 			self._redraw_contents()
 			self.stdscr.refresh()
@@ -834,6 +847,8 @@ class QuickCopyAction(PaneJumpAction):
 			tier_exprs.append(l)
 			tier_ctr += 1
 		self.tier_exprs = tier_exprs
+		self.next_batch_char = get_tmux_option_key_curses('@copytk-quickcopy-next-batch-char', ' n', aslist=True)
+		self.em_label_chars = ''.join(( c for c in self.em_label_chars if c not in self.next_batch_char ))
 		log('constructor finished')
 
 	def _matchobj(self, start, end, tier=0):
@@ -930,6 +945,72 @@ class QuickCopyAction(PaneJumpAction):
 			matches = overlaps
 		return batches
 
+	def run_batch(self, batch):
+		# Returns a match object if one is selected. (actually a list of match objects that will all have same text)
+		# Returns None to cycle to next batch
+		# Throws ActionCanceled if canceled or invalid selection
+		
+		# Assign a code to each match in the batch
+		labels = []
+		match_text_label_map = {} # use this so matches with same text have same label
+		label_it = gen_em_labels(len(batch), self.em_label_chars)
+		for match in batch:
+			if match[2] in match_text_label_map:
+				labels.append(match_text_label_map[match[2]])
+			else:
+				l = next(label_it)
+				labels.append(l)
+				match_text_label_map[match[2]] = l
+		
+		# Set up match_locations and highlights
+		self.match_locations = [ ( match[4][0], match[4][1], labels[i] ) for i, match in enumerate(batch) ]
+		line_width = self.orig_pane['pane_size'][0]
+		def updatehl():
+			self.highlight_ranges = [
+				(
+					( min(match[4][0] + len(labels[i]) - self.cur_label_pos, line_width), match[4][1] ),
+					( match[5][0], match[5][1] )
+				)
+				for i, match in enumerate(batch) 
+			]
+		updatehl()
+		self.redraw()
+
+		# Input label
+		keyed_label = ''
+		while True: # loop over each key/char in the label
+			k = self.getkey() # checks for cancel key and throws
+			if k in self.next_batch_char:
+				return None
+			keyed_label += k
+			self.cur_label_pos += 1
+			# Update match locations and highlights
+			new_match_locations = []
+			new_labels = []
+			new_batch = []
+			for i, label in enumerate(labels):
+				if label.startswith(keyed_label):
+					new_labels.append(label)
+					new_match_locations.append(self.match_locations[i])
+					new_batch.append(batch[i])
+			batch = new_batch
+			labels = new_labels
+			self.match_locations = new_match_locations
+			updatehl()
+			self.match_locations = [ m for m in self.match_locations if m[2].startswith(keyed_label) ]
+			# count remaining matches by ones with unique text rather than total count
+			num_unique_texts = len(set(( m[2] for m in batch )))
+			if num_unique_texts < 2:
+				break
+			self.redraw()
+		log('keyed label: ' + keyed_label, time=True)
+
+		self.reset()
+		if len(batch) == 0:
+			raise ActionCanceled() # invalid entry
+		else:
+			return batch
+
 	def run(self):
 		log('quickcopy run')
 		# Get a list of all matches
@@ -937,7 +1018,7 @@ class QuickCopyAction(PaneJumpAction):
 		log('got matches')
 
 		# Group them into display batches
-		pack_tiers = get_tmux_option('@copytk-quickcopy-pack-tiers', 'on') in ( 'on', 'true', 'yes', '1' )
+		pack_tiers = str2bool(get_tmux_option('@copytk-quickcopy-pack-tiers', 'on'))
 		batches = self.arrange_matches(matches)
 		log('arranged matches')
 
@@ -945,32 +1026,25 @@ class QuickCopyAction(PaneJumpAction):
 		log('swapped in hidden pane')
 
 		# Display each batch until a valid match has been selected
+		selected = None
 		for batch in batches:
-			# Assign a code to each match in the batch
-			labels = []
-			match_text_label_map = {} # use this so matches with same text have same label
-			label_it = gen_em_labels(len(batch), self.em_label_chars)
-			for match in batch:
-				if match[2] in match_text_label_map:
-					labels.append(match_text_label_map[match[2]])
-				else:
-					l = next(label_it)
-					labels.append(l)
-					match_text_label_map[match[2]] = l
-			# Set up match_locations and highlights
-			self.match_locations = [ ( match[4][0], match[4][1], labels[i] ) for i, match in enumerate(batch) ]
-			line_width = self.orig_pane['pane_size'][0]
-			self.highlight_ranges = [
-				(
-					( min(match[4][0] + len(labels[i]), line_width), match[4][1] ),
-					( match[5][0], match[5][1] )
-				)
-				for i, match in enumerate(batch) 
-			]
-			self.redraw()
-			time.sleep(5)
-			self.reset()
+			selected = self.run_batch(batch)
+			if selected: break
+		if not selected: return
 
+		# Got result.  Do copy.
+		selected_data = selected[0][2]
+		log('Copied: ' + selected_data)
+		execute_copy(selected_data)
+
+		# Flash highlights
+		self.match_locations = None
+		hl_ranges = [ (match[4], match[5]) for match in selected ]
+		flash_only_one = str2bool(get_tmux_option('@copytk-flash-only-one', 'on'))
+		if flash_only_one: hl_ranges = [ hl_ranges[0] ]
+		self.flash_highlight_range(hl_ranges, preflash=True)
+
+			
 def run_easymotion(stdscr):
 	nkeys = 1
 	if args.search_nkeys:
