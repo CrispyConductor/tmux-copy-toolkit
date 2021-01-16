@@ -158,7 +158,7 @@ def fetch_tmux_options(optmode='g'):
 	tmux_options_cache[optmode] = opts
 	return opts
 
-def get_tmux_option(name, default=None, optmode='g', aslist=False):
+def get_tmux_option(name, default=None, optmode='g', aslist=False, userlist=False):
 	opts = fetch_tmux_options(optmode)
 	if aslist:
 		ret = []
@@ -166,7 +166,10 @@ def get_tmux_option(name, default=None, optmode='g', aslist=False):
 			ret.append(opts[name])
 		i = 0
 		while True:
-			lname = name + '[' + str(i) + ']'
+			if userlist:
+				lname = name + '-' + str(i)
+			else:
+				lname = name + '[' + str(i) + ']'
 			if lname not in opts: break
 			ret.append(opts[lname])
 			i += 1
@@ -356,48 +359,90 @@ def process_pane_capture_line(line):
 # Aligns display capture data to actual data that doesn't include wraps.
 # Returns a dict mapping each (x, y) in disp_data to an index in j_data.
 # If alignment fails, returns None.
+# size is x, y (column, lineno)
 def align_capture_data(disp_data, j_data, size):
+	# TODO: Add checks for if arguments are 0-length or otherwise invalid
 	jidx = 0
 	didx = 0
-	charmap = {} # map from index in disp_data to index in j_data
+	charmap = [] # map from index in disp_data to index in j_data
+	jcharmap = [] # map from index in j_data to index in disp_data
 	while didx < len(disp_data):
 		if jidx >= len(j_data):
-			charmap[didx] = len(j_data) - 1
+			charmap.append(len(j_data) - 1)
 			didx += 1
 			continue
 		jc = j_data[jidx]
 		dc = disp_data[didx]
 		if jc == dc: # usual case - characters match
-			charmap[didx] = jidx
+			charmap.append(jidx)
+			jcharmap.append(didx)
 			didx += 1
 			jidx += 1
 		elif dc == '\t' and jc == ' ':
 			for i in range(8):
 				if jidx < len(j_data) and j_data[jidx] == ' ':
+					jcharmap.append(didx)
 					jidx += 1
 				else:
 					break
 		elif jc == '\t' and dc == ' ':
 			for i in range(8):
 				if didx < len(disp_data) and disp_data[didx] == ' ':
-					charmap[didx] = jidx
+					charmap.append(jidx)
 					didx += 1
 				else:
 					break
 		elif dc == '\n' or dc == ' ' or dc == '\t':
-			charmap[didx] = max(jidx - 1, 0)
+			charmap.append(max(jidx - 1, 0))
 			didx += 1
 		elif jc == ' ' or jc == '\t':
+			jcharmap.append(didx)
 			jidx += 1
 		else:
 			return None
+	# Pad maps to full length if necessary
+	while len(charmap) < len(disp_data):
+		charmap.append(len(j_data) - 1)
+	while len(jcharmap) < len(j_data):
+		jcharmap.append(len(disp_data) - 1)
 	# Convert character mapping to mapping indexed by disp_data (x, y)
 	xymap = {
-		xy : charmap.get(didx, 0)
+		xy : charmap[didx] if didx < len(charmap) and didx < len(disp_data) else len(j_data) - 1
 		for xy, didx in get_data_xy_idx_map(disp_data, size).items()
 	}
+	# Convert j character mapping to a mapping from j char index to display (x, y)
+	didx_rev_coord_map = get_data_xy_idx_rev_map(disp_data, size)
+	xymapj = [
+		didx_rev_coord_map[min(didx, len(disp_data) - 1)]
+		for didx in jcharmap
+	]
+	# Return values are:
+	# 0. Mapping dict from tuple (x, y) display position to index into j_data
+	# 1. Mapping list from index into j_data to (x, y) display position
+	# 2. Mapping list from index into disp_data to index into j_data
+	# 3. Mapping list from index into j_data to index into disp_data
+	return xymap, xymapj, charmap, jcharmap
 
-	return xymap, charmap
+# Returns a mapping array from index in data (the pane capture data) to the (x, y) coordinates on screen
+def get_data_xy_idx_rev_map(data, size):
+	revmap = []
+	lineno = 0
+	col = 0
+	for dchar in data:
+		if dchar == '\n':
+			revmap.append((col, lineno))
+			lineno += 1
+			col = 0
+			continue
+		if col >= size[0]:
+			lineno += 1
+			col = 0
+		revmap.append((col, lineno))
+		if dchar == '\t':
+			col = min(col + 8, size[0])
+		else:
+			col += 1
+	return revmap
 
 # Return a map from (x,y) to index into data
 def get_data_xy_idx_map(data, size):
@@ -458,8 +503,10 @@ class PaneJumpAction:
 			# Fall back to just mapping the display data to itself
 			self.copy_data = self.orig_pane['contents']
 			self.disp_copy_map = get_data_xy_idx_map(self.copy_data, self.orig_pane['pane_size'])
+			self.copy_disp_map = get_data_xy_idx_rev_map(self.copy_data, self.orig_pane['pane_size'])
 		else:
 			self.disp_copy_map = aligninfo[0]
+			self.copy_disp_map = aligninfo[1]
 
 		# Fetch options
 		self.cancel_keys = get_tmux_option_key_curses('@copytk-cancel-key', default='Escape Enter ^C', aslist=True)
@@ -490,60 +537,62 @@ class PaneJumpAction:
 		# Highlighted location
 		if not keep_highlight:
 			self.highlight_location = None
-			self.highlight_range = None # range is inclusive
+			self.highlight_ranges = None # range is inclusive
 
 		# display current contents
 		log('\n'.join(self.display_content_lines), 'display_content_lines')
 		self.redraw()
 
 	def flash_highlight_range(self, hlrange, noredraw=False):
-		self.highlight_range = hlrange
-		self._redraw_contents()
+		if not self.highlight_ranges:
+			self.highlight_ranges = []
+		self.highlight_ranges.append(hlrange)
+		self._redraw_highlight_ranges()
 		self.stdscr.refresh()
 		delayt = float(get_tmux_option('@copytk-flash-time', '0.6'))
 		time.sleep(delayt)
-		self.highlight_range = None
+		self.highlight_ranges.pop()
 		if not noredraw:
 			self._redraw_contents()
 			self.stdscr.refresh()
 
+	def addstr(self, y, x, s, a=None):
+		if len(s) == 0: return
+		try:
+			if a == None:
+				self.stdscr.addstr(y, x, s)
+			else:
+				self.stdscr.addstr(y, x, s, a)
+		except Exception as err:
+			log(f'Error writing str to screen.  curses_size={self.curses_size} linelen={len(line)} i={i} err={str(err)}')
+
 	def _redraw_contents(self):
-		def addstr(y, x, s, a=None):
-			if len(s) == 0: return
-			try:
-				if a == None:
-					self.stdscr.addstr(y, x, s)
-				else:
-					self.stdscr.addstr(y, x, s, a)
-			except Exception as err:
-				log(f'Error writing str to screen.  curses_size={self.curses_size} linelen={len(line)} i={i} err={str(err)}')
 		line_width = min(self.curses_size[1], self.orig_pane['pane_size'][0])
 		max_line = min(self.curses_size[0], len(self.display_content_lines))
 		for i in range(max_line):
 			line = self.display_content_lines[i][:line_width].ljust(self.curses_size[0])
-			if i >= max_line - 1 and len(line) >= line_width:
-				# curses doesn't like writing strings to bottom-right char
-				line = line[:line_width-1]
-			if self.highlight_range:
-				rng = self.highlight_range
-				hlattr = curses.color_pair(3)
+			self.addstr(i, 0, line)
+
+	def _redraw_highlight_ranges(self):
+		if not self.highlight_ranges: return
+		hlattr = curses.color_pair(3)
+		for rng in self.highlight_ranges:
+			log('Drawing hl range: ' + str(rng))
+			for i in range(rng[0][1], rng[1][1] + 1):
+				line = self.display_content_lines[i]
 				if i < rng[0][1] or i > rng[1][1]: # whole line not hl
-					addstr(i, 0, line)
+					continue
 				elif i > rng[0][1] and i < rng[1][1]: # whole line hl
-					addstr(i, 0, line, hlattr)
+					self.addstr(i, 0, line, hlattr)
 				elif i == rng[0][1] and i == rng[1][1]: # range starts and stops on this line
-					addstr(i, 0, line)
-					addstr(i, rng[0][0], line[rng[0][0]:rng[1][0]+1], hlattr)
+					self.addstr(i, rng[0][0], line[rng[0][0]:rng[1][0]+1], hlattr)
 				elif i == rng[0][1]: # range starts on this line
-					addstr(i, 0, line[0:rng[0][0]])
-					addstr(i, rng[0][0], line[rng[0][0]:], hlattr)
+					self.addstr(i, rng[0][0], line[rng[0][0]:], hlattr)
 				elif i == rng[1][1]: # range ends on this line
-					addstr(i, 0, line[0:rng[1][0]+1], hlattr)
-					addstr(i, rng[1][0]+1, line[rng[1][0]+1:])
+					self.addstr(i, 0, line[0:rng[1][0]+1], hlattr)
 				else:
 					assert(False)
-			else:
-				addstr(i, 0, line)
+			log('Done drawing hl range')
 
 	def _redraw_labels(self):
 		line_width = min(self.curses_size[1], self.orig_pane['pane_size'][0])
@@ -565,7 +614,7 @@ class PaneJumpAction:
 	def redraw(self):
 		self._redraw_contents()
 		self._redraw_labels()
-		# highlight
+		# highlight char
 		if self.highlight_location:
 			loc = self.highlight_location
 			if loc[0] < self.curses_size[1] and loc[1] < self.curses_size[0] and not (loc[0] == self.curses_size[1] - 1 and loc[1] == self.curses_size[0] - 1):
@@ -574,6 +623,8 @@ class PaneJumpAction:
 				except:
 					c = '['
 				self.stdscr.addch(loc[1], loc[0], c, curses.color_pair(3))
+		# highlight ranges
+		self._redraw_highlight_ranges()
 		# status message
 		if self.status_msg:
 			try:
@@ -759,6 +810,28 @@ class EasyCopyAction(EasyMotionAction):
 		# Flash selected range as confirmation
 		self.flash_highlight_range((pos1, pos2))
 
+
+class QuickCopyAction(PaneJumpAction):
+
+	def __init__(self, stdscr):
+		super().__init__(stdscr)
+		# Load in the tiers of match expressions.
+		# Options for this are in the form: @copytk-quickcopy-match-<Tier>-<TierIndex>
+		# Each tier list is terminated by a missing option at the index.
+		# The set of tiers is terminated by a missing 0 index for the tier.
+		tier_exprs = []
+		tier_ctr = 0
+		while True:
+			l = get_tmux_option('@copytk-quickcopy-match-' + str(tier_ctr), aslist=True, userlist=True)
+			if l == None or len(l) == 0:
+				break
+			tier_exprs.append(l)
+		self.tier_exprs = tier_exprs
+
+	def find_matches(self):
+		# Produce a list of matches where each entry is in this format:
+		# ( tiernum, matchlen, data, ( disp start x, disp start y ), ( disp end x, disp end y ) )
+		pass
 
 def run_easymotion(stdscr):
 	nkeys = 1
