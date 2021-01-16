@@ -299,9 +299,9 @@ def cleanup_internal_process():
 		swap_hidden_pane()
 	runtmux([ 'kill-window', '-t', args.hidden_window ])
 
-def gen_em_labels(n, min_nchars=1, max_nchars=None):
+def gen_em_labels(n, chars=None, min_nchars=1, max_nchars=None):
 	# Generates easy-motion letter abbreviation sequences
-	all_chars = 'asdghklqwertyuiopzxcvbnmfj;'
+	all_chars = chars or 'asdghklqwertyuiopzxcvbnmfj;'
 	# Determine how many chars per label are needed
 	need_label_len = max(math.ceil(math.log(n, len(all_chars))), 1)
 	if min_nchars > need_label_len:
@@ -472,7 +472,7 @@ def execute_copy(data):
 	log('Copied data.')
 
 #n = 10000
-#ls = gen_em_labels(n, 1, 2)
+#ls = gen_em_labels(n)
 #for i in range(n):
 #	print(next(ls))
 #exit(0)
@@ -490,6 +490,9 @@ class PaneJumpAction:
 		# Fetch information about the panes and capture original contents
 		self.orig_pane = get_pane_info(args.t, capture=True, capturej=True)
 		self.overlay_pane = get_pane_info(args.hidden_t)
+
+		# Fetch options
+		self.em_label_chars = get_tmux_option('@copytk-label-chars', 'asdghklqwertyuiopzxcvbnmfj;')
 
 		# Sanitize the J capture data by removing trailing spaces on each line
 		self.copy_data = '\n'.join(( line.rstrip() for line in self.orig_pane['contentsj'].split('\n') ))
@@ -744,7 +747,7 @@ class EasyMotionAction(PaneJumpAction):
 		self._em_sort_locs_cursor_proximity(locs, sort_close_to)
 
 		# Assign each match a label
-		label_it = gen_em_labels(len(locs))
+		label_it = gen_em_labels(len(locs), self.em_label_chars)
 		self.match_locations = [ (ml[0], ml[1], next(label_it) ) for ml in locs ]
 
 		# Draw labels
@@ -821,19 +824,132 @@ class QuickCopyAction(PaneJumpAction):
 		# Options for this are in the form: @copytk-quickcopy-match-<Tier>-<TierIndex>
 		# Each tier list is terminated by a missing option at the index.
 		# The set of tiers is terminated by a missing 0 index for the tier.
-		tier_exprs = []
+		tier_exprs = [] # list (of tiers) of lists of strings
 		tier_ctr = 0
+		log('getting options')
 		while True:
 			l = get_tmux_option('@copytk-quickcopy-match-' + str(tier_ctr), aslist=True, userlist=True)
 			if l == None or len(l) == 0:
 				break
 			tier_exprs.append(l)
+			tier_ctr += 1
 		self.tier_exprs = tier_exprs
+		log('constructor finished')
+
+	def _matchobj(self, start, end, tier=0):
+		return (
+			tier,
+			end-start,
+			self.copy_data[start:end],
+			(start, end),
+			self.copy_disp_map[start] if start < len(self.copy_data) else len(self.copy_data) - 1,
+			self.copy_disp_map[end - 1]
+		)
+
+	def _matchobjs(self, tuplist, tier=0):
+		return [ self._matchobj(start, end, tier=tier) for start, end in tuplist ]
+	
+	def _find_lines_matches(self):
+		start = 0
+		for i, c in enumerate(self.copy_data):
+			if c == '\n':
+				if i > start:
+					yield (start, i)
+				start = i + 1
+		if len(self.copy_data) > start + 1:
+			yield (start, len(self.copy_data))
+
+	# Returns an iterator over (start, end) tuples
+	def find_expr_matches(self, expr):
+		if expr == 'lines':
+			for m in self._find_lines_matches():
+				yield m
+			return
+		# regex expr
+		for match in re.finditer(expr, self.copy_data):
+			try:
+				d = ( match.start(1), match.end(1) )
+			except IndexError:
+				d = ( match.start(0), match.end(0) )
+			if d[0] < 0 or d[1] < 0:
+				d = ( 0, 0 )
+			yield d
 
 	def find_matches(self):
 		# Produce a list of matches where each entry is in this format:
-		# ( tiernum, matchlen, data, ( disp start x, disp start y ), ( disp end x, disp end y ) )
-		pass
+		# ( tiernum, matchlen, data, ( copy data start, copy data end ), ( disp start x, disp start y ), ( disp end x, disp end y ) )
+		allmatches = []
+		for tier, exprs in enumerate(self.tier_exprs):
+			for expr in exprs:
+				allmatches.extend(self._matchobjs(self.find_expr_matches(expr), tier))
+		# Filter out matches shorter than the minimum
+		min_match_len = get_tmux_option('@copytk-quickcopy-min-match-len', 4)
+		return [ m for m in allmatches if m[1] >= min_match_len ]
+
+	def arrange_matches(self, matches):
+		# TODO: Add pack tiers option (default true) so force splitting tiers into separate batches
+		# Arrange the set of matches into batches of non-overlapping ones, by tier, and by shortness (shorter preferred)
+		# Do this by "writing" each match's range onto a virtual screen, marking each char, and pushing overlapping ones
+		# to the next batch.
+		matches.sort()
+		batches = []
+		log('start arrange_matches')
+		while len(matches) > 0: # iterate over batches
+			#log('MATCHES:')
+			#log(str(matches))
+			overlaps = []
+			virt = [ False ] * len(self.copy_data)
+			batch = []
+			for m in matches: # iterate over remaining matches
+				# Check if overlaps
+				o = False
+				for i in range(m[3][0], m[3][1]):
+					if virt[i]:
+						o = True
+						break
+				if o:
+					overlaps.append(m)
+				else:
+					batch.append(m)
+					for i in range(m[3][0], m[3][1]):
+						virt[i] = True
+			batches.append(batch)
+			matches = overlaps
+		return batches
+
+	def run(self):
+		log('quickcopy run')
+		# Get a list of all matches
+		matches = self.find_matches()
+		log('got matches')
+
+		# Group them into display batches
+		batches = self.arrange_matches(matches)
+		log('arranged matches')
+
+		swap_hidden_pane(True)
+		log('swapped in hidden pane')
+
+		# Display each batch until a valid match has been selected
+		for batch in batches:
+			# Assign a code to each match in the batch
+			labels = []
+			for l in gen_em_labels(len(batch), self.em_label_chars):
+				labels.append(l)
+				if len(labels) >= len(batch): break
+			# Set up match_locations and highlights
+			self.match_locations = [ ( match[4][0], match[4][1], labels[i] ) for i, match in enumerate(batch) ]
+			line_width = self.orig_pane['pane_size'][0]
+			self.highlight_ranges = [
+				(
+					( min(match[4][0] + len(labels[i]), line_width), match[4][1] ),
+					( match[5][0], match[5][1] )
+				)
+				for i, match in enumerate(batch) 
+			]
+			self.redraw()
+			time.sleep(5)
+			return
 
 def run_easymotion(stdscr):
 	nkeys = 1
@@ -848,6 +964,9 @@ def run_easycopy(stdscr):
 		nkeys = int(args.search_nkeys)
 	EasyCopyAction(stdscr, nkeys).run()
 
+def run_quickcopy(stdscr):
+	log('run_quickcopy')
+	QuickCopyAction(stdscr).run()
 
 
 
@@ -937,6 +1056,8 @@ try:
 		curses.wrapper(run_easymotion)
 	elif args.action == 'easycopy':
 		curses.wrapper(run_easycopy)
+	elif args.action == 'quickcopy':
+		curses.wrapper(run_quickcopy)
 	else:
 		print('Invalid action')
 		exit(1)
