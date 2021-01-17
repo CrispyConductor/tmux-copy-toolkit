@@ -29,6 +29,7 @@ tmux bind-key -T copy-mode-vi S switch-client -T copytk
 tmux bind-key -T copy-mode S switch-client -T copytk
 
 
-tmux set -g @copytk-quickcopy-match-0-0 '[0-9]{4,}'
-tmux set -g @copytk-quickcopy-match-1-0 lines
+tmux set -g @copytk-quickcopy-match-0-0 urls
+tmux set -g @copytk-quickcopy-match-1-0 '[0-9]{4,}'
+tmux set -g @copytk-quickcopy-match-2-0 lines
 
