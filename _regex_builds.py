@@ -16,10 +16,11 @@ def make_path_regexes():
 	leader = r'(?:^|' + edge_delimiters + ')'
 	leader_w_slash = r'(?:^|' + edge_delimiters_w_slash + ')'
 	follower = r'(?:$|' + edge_delimiters + ')'
-	path_el = r'[a-zA-Z0-9_-]{1,30}'
+	path_el = r'(?:[a-zA-Z0-9_-]{1,30}|\.|\.\.)'
+	filename_core = r'[a-zA-Z0-9_-]{1,30}'
 	inner_path_el = r'[a-zA-Z0-9_-]{1,25}\\? [a-zA-Z0-9_-]{1,25}'
 	either_path_el = r'(?:' + path_el + '|' + inner_path_el + ')'
-	basic_filename = path_el + r'\.' + r'[a-zA-Z][a-zA-Z0-9]{0,5}'
+	basic_filename = filename_core + r'\.' + r'[a-zA-Z][a-zA-Z0-9]{0,5}'
 	path_filename = either_path_el + r'\.' + r'[a-zA-Z0-9]{1,6}'
 	sep = r'[\\/]'
 	root = r'(?:/|~/|[A-Z]:' + sep + ')'
@@ -48,6 +49,8 @@ def test_path_regexes():
 	foo bar/baz
 	foo/bar baz/fiz
 	foo/bar baz/fiz.buz
+	./copytk.tmux
+	././copytk.tmux
 	'''.split('\n')
 	testpaths = [ p.strip() for p in testpaths if len(p.strip()) ]
 
@@ -187,7 +190,7 @@ def print_rex(name, r, comment=None):
 	rxstr = "r'" + r.replace("'", "'+\"'\"+r'") + "'"
 	if comment:
 		print(f"\t# {comment}")
-	print(f"\t'{name}': {rxstr}")
+	print(f"\t'{name}': {rxstr},")
 
 #test_url_regex()
 

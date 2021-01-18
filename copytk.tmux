@@ -33,9 +33,11 @@ tmux bind-key -T copy-mode S switch-client -T copytk
 tmux set -g @copytk-quickcopy-match-0-0 urls
 tmux set -g @copytk-quickcopy-match-0-1 abspaths
 tmux set -g @copytk-quickcopy-match-1-0 paths
-tmux set -g @copytk-quickcopy-match-1-0 filenames
+tmux set -g @copytk-quickcopy-match-1-1 filenames
+# Match commands after the prompt
+tmux set -g @copytk-quickcopy-match-2-0 '^.{0,80}\$ ([a-zA-Z][a-zA-Z0-9_-]*(?: .*)?)$'
 # Match numbers
-tmux set -g @copytk-quickcopy-match-2-0 '-?[0-9]+(?:\.[0-9]+)?(?:[eE]-?[0-9]+)?'
+tmux set -g @copytk-quickcopy-match-3-0 '-?[0-9]+(?:\.[0-9]+)?(?:[eE]-?[0-9]+)?'
 # Match whole lines
-tmux set -g @copytk-quickcopy-match-3-0 lines
+tmux set -g @copytk-quickcopy-match-4-0 lines
 
