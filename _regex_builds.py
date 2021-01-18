@@ -1,4 +1,68 @@
+# Note: The regexes in this file are not intended to correctly validate
+# all instances of the given type.  They are designed to match the most
+# common variants while specifically excluding less-common ones that could
+# introduce false matches.
+
 import re
+
+def make_path_regexes():
+	# This is not intended to match all valid paths - that would result in too many matches.
+	# Note: Spaces, as a common delimiter, are handled specially.  They are only allowed in
+	# paths with at least 3 elements, and never in the first or last element.  There cannot
+	# be more than one consecutive space, and it cannot be at the beginning or end of the
+	# element.
+	edge_delimiters = r'[][\s:=,#$"{}<>()' + "'" + ']'
+	edge_delimiters_w_slash = r'[][\s:=,#$"{}<>()/' + "'" + ']'
+	leader = r'(?:^|' + edge_delimiters + ')'
+	leader_w_slash = r'(?:^|' + edge_delimiters_w_slash + ')'
+	follower = r'(?:$|' + edge_delimiters + ')'
+	path_el = r'[a-zA-Z0-9_-]{1,30}'
+	inner_path_el = r'[a-zA-Z0-9_-]{1,25}\\? [a-zA-Z0-9_-]{1,25}'
+	either_path_el = r'(?:' + path_el + '|' + inner_path_el + ')'
+	basic_filename = path_el + r'\.' + r'[a-zA-Z][a-zA-Z0-9]{0,5}'
+	path_filename = either_path_el + r'\.' + r'[a-zA-Z0-9]{1,6}'
+	sep = r'[\\/]'
+	root = r'(?:/|~/|[A-Z]:' + sep + ')'
+	abspath = root + r'(?:' + either_path_el + sep + ')*' + r'(?:' + path_filename + '|' + path_el + sep + '?)'
+	relpath2 = path_el + sep + r'(?:' + path_el + sep + '?|' + path_filename + ')'
+	relpath3 = path_el + sep + r'(?:' + either_path_el + sep + r')+' + r'(?:' + path_el + sep + '?|' + path_filename + ')'
+	anypath = r'(?:' + abspath + '|' + relpath2 + '|' + relpath3 + ')'
+	rabspath = leader + '(' + abspath + ')' + follower
+	ranypath = leader + '(' + anypath + ')' + follower
+	rfilename = leader_w_slash + '(' + basic_filename + ')' + follower
+	return rabspath, ranypath, rfilename
+
+def test_path_regexes():
+	testpaths = r'''
+	foo
+	foo/bar
+	foo/bar/baz
+	baz.mp3
+	123.456
+	C:\fooo
+	C:\fooo.bar
+	C:/fooo.bar
+	/fooo
+	/fooo.bar
+	/abc/def/ghi
+	foo bar/baz
+	foo/bar baz/fiz
+	foo/bar baz/fiz.buz
+	'''.split('\n')
+	testpaths = [ p.strip() for p in testpaths if len(p.strip()) ]
+
+	abspath, anypath, filename = make_path_regexes()
+
+	print('abspath: ' + abspath)
+	print('anypath: ' + anypath)
+	print('filename: ' + filename)
+
+	for p in testpaths:
+		m1 = re.fullmatch(abspath, p)
+		m2 = re.fullmatch(anypath, p)
+		m3 = re.fullmatch(filename, p)
+		print(f'{p} - {"ABS" if m1 else ""} {"PATH" if m2 else ""} {"FILE" if m3 else ""}')
+
 
 # Note: This url regex is not a validator, nor is it intended to be.  It is intended
 # to match the most common kinds of URLs that are used and avoid unintended matches.
@@ -119,8 +183,25 @@ def test_url_regex():
 		else:
 			print(f'{u} - No Match')
 
-test_url_regex()
+def print_rex(name, r, comment=None):
+	rxstr = "r'" + r.replace("'", "'+\"'\"+r'") + "'"
+	if comment:
+		print(f"\t# {comment}")
+	print(f"\t'{name}': {rxstr}")
 
-r = make_url_regex()
-print("r'" + r.replace("'", "'+\"'\"+r'") + "'")
+#test_url_regex()
+
+#print('URL:')
+print_rex('urls', make_url_regex(), 'matches common types of urls and things that look like urls')
+print
+
+#test_path_regexes()
+
+absp, anyp, fn = make_path_regexes()
+#print('ABS PATH:')
+print_rex('abspaths', absp, 'Unix and window style absolute paths')
+#print('PATH:')
+print_rex('paths', anyp, 'Absolute or relative paths')
+#print('FILE:')
+print_rex('filenames', fn, 'Isolated filenames without paths')
 
