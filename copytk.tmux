@@ -31,9 +31,12 @@ tmux bind-key -T copy-mode S switch-client -T copytk
 
 # Match URLs
 tmux set -g @copytk-quickcopy-match-0-0 urls
+# Match paths and filenames
 tmux set -g @copytk-quickcopy-match-0-1 abspaths
 tmux set -g @copytk-quickcopy-match-1-0 paths
 tmux set -g @copytk-quickcopy-match-1-1 filenames
+# Match IP addrs
+tmux set -g @copytk-quickcopy-match-1-2 '(?:^|\W)([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})(?:$|\W)'
 # Match commands after the prompt
 tmux set -g @copytk-quickcopy-match-2-0 '(?m)^[^\n]{0,80}\$ ([a-zA-Z][a-zA-Z0-9_-]*(?: [^\n]*)?)$'
 # Match numbers
