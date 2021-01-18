@@ -294,7 +294,7 @@ def swap_hidden_pane(show_hidden=None):
 		# Swap target pane and hidden pane
 		t1 = args.t
 		t2 = args.hidden_t
-		runtmux([ 'swap-pane', '-Z', '-s', t2, '-t', t1 ])
+		runtmux([ 'swap-pane', '-s', t2, '-t', t1 ])
 	else:
 		# Switch to either the hidden window or the orig window
 		if swap_count % 2 == 0:
