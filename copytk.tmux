@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 CURRENT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+get_tmux_option() {
+	tmux show-options -g | grep "^${1} " | head -n1 | cut -d ' ' -f 2-
+}
+NOBINDS=0
+NOMATCHES=0
+if [ "`get_tmux_option '@copytk-no-default-binds'`" = 'on' ]; then NOBINDS=1; fi
+if [ "`get_tmux_option '@copytk-no-default-matches'`" = 'on' ]; then NOMATCHES=1; fi
+
+if [ $NOBINDS -eq 0 ]; then
+
 # copytk prefix: easymotion action bindings
 tmux bind-key -T copytk s run-shell -b "python3 $CURRENT_DIR/copytk.py easymotion-search --search-nkeys 1"
 tmux bind-key -T copytk S run-shell -b "python3 $CURRENT_DIR/copytk.py easymotion-search --search-nkeys 2"
@@ -32,6 +42,10 @@ tmux bind-key -T prefix C-p run-shell -b "python3 $CURRENT_DIR/copytk.py quickop
 tmux bind-key -T copy-mode-vi S switch-client -T copytk
 tmux bind-key -T copy-mode S switch-client -T copytk
 
+fi
+
+
+if [ $NOMATCHES -eq 0 ]; then
 
 # Match URLs
 tmux set -g @copytk-quickcopy-match-0-0 urls
@@ -55,4 +69,5 @@ tmux set -g @copytk-quickopen-match-0-0 urls
 tmux set -g @copytk-quickopen-match-0-1 abspaths
 
 
+fi
 
