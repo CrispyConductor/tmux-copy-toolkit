@@ -490,7 +490,7 @@ def get_data_xy_idx_map(data, size):
 
 
 def execute_copy(data):
-	command = get_tmux_option('@copytk-copy-command', 'tmux load-buffer -')
+	command = os.path.expanduser(get_tmux_option('@copytk-copy-command', 'tmux load-buffer -'))
 	runshellcommand(command, sendstdin=data)
 	log('Copied data.')
 
