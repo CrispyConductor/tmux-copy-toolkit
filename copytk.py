@@ -165,6 +165,9 @@ def fetch_tmux_options(optmode='g'):
 		if len(val) > 1 and val[0] == '"':
 			assert(val[-1] == '"')
 			val = val[1:-1]
+		elif len(val) > 1 and val[0] == "'":
+			assert(val[-1] == "'")
+			val = val[1:-1]
 		if val.find('\\') != -1:
 			rval = ''
 			esc = False
@@ -912,12 +915,16 @@ class QuickCopyAction(PaneJumpAction):
 			return
 		# regex expr
 		log('Matching against expr ' + expr)
-		for match in re.finditer(expr, self.copy_data, re.MULTILINE):
+		flags = 0
+		if expr.startswith('(?m)'):
+			flags = re.MULTILINE
+			expr = expr[4:]
+		for match in re.finditer(expr, self.copy_data, flags):
 			try:
 				d = ( match.start(1), match.end(1) )
 			except IndexError:
 				d = ( match.start(0), match.end(0) )
-			log('Found match: ' + str(d))
+			log('Found match: ' + str(d) + ': ' + self.copy_data[d[0]:d[1]])
 			if d[0] < 0 or d[1] < 0:
 				d = ( 0, 0 )
 			yield d
@@ -1047,12 +1054,14 @@ class QuickCopyAction(PaneJumpAction):
 		log('quickcopy run')
 		# Get a list of all matches
 		matches = self.find_matches()
+		log('find_matches() result: ' + str(matches))
 		if len(matches) == 0: return
 		log('got matches')
 
 		# Group them into display batches
 		pack_tiers = str2bool(get_tmux_option('@copytk-quickcopy-pack-tiers', 'on'))
 		batches = self.arrange_matches(matches)
+		log('arrange_matches() result: ' + str(batches))
 		log('arranged matches')
 
 		swap_hidden_pane(True)
