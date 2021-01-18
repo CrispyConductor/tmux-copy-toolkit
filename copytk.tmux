@@ -24,6 +24,10 @@ tmux bind-key -T prefix C-s run-shell -b "python3 $CURRENT_DIR/copytk.py easycop
 tmux bind-key -T prefix Q run-shell -b "python3 $CURRENT_DIR/copytk.py quickcopy"
 tmux bind-key -T prefix C-q run-shell -b "python3 $CURRENT_DIR/copytk.py quickcopy"
 
+# tmux prefix: quickopen action bindings
+tmux bind-key -T prefix P run-shell -b "python3 $CURRENT_DIR/copytk.py quickopen"
+tmux bind-key -T prefix C-p run-shell -b "python3 $CURRENT_DIR/copytk.py quickopen"
+
 # bindings to enter copytk prefix
 tmux bind-key -T copy-mode-vi S switch-client -T copytk
 tmux bind-key -T copy-mode S switch-client -T copytk
@@ -46,4 +50,9 @@ tmux set -g @copytk-quickcopy-match-3-1 '"([^"\n]*)"'
 tmux set -g @copytk-quickcopy-match-3-2 ''\''([^'\'\\'n]*)'\'
 # Match whole lines
 tmux set -g @copytk-quickcopy-match-4-0 lines
+
+tmux set -g @copytk-quickopen-match-0-0 urls
+tmux set -g @copytk-quickopen-match-0-1 abspaths
+
+
 

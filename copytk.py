@@ -11,6 +11,7 @@ import subprocess
 import shutil
 from datetime import datetime
 import time
+import platform
 
 logdir = '/tmp/tmplog'
 
@@ -862,8 +863,14 @@ class EasyCopyAction(EasyMotionAction):
 
 class QuickCopyAction(PaneJumpAction):
 
-	def __init__(self, stdscr):
+	def __init__(self, stdscr, options_prefix='@copytk-quickcopy-'):
 		super().__init__(stdscr)
+		self.options_prefix = options_prefix
+		self._load_options(options_prefix)
+		self.em_label_chars = ''.join(( c for c in self.em_label_chars if c not in self.next_batch_char ))
+		log('constructor finished')
+
+	def _load_options(self, prefix='@copytk-quickcopy-'):
 		# Load in the tiers of match expressions.
 		# Options for this are in the form: @copytk-quickcopy-match-<Tier>-<TierIndex>
 		# Each tier list is terminated by a missing option at the index.
@@ -872,15 +879,15 @@ class QuickCopyAction(PaneJumpAction):
 		tier_ctr = 0
 		log('getting options')
 		while True:
-			l = get_tmux_option('@copytk-quickcopy-match-' + str(tier_ctr), aslist=True, userlist=True)
+			l = get_tmux_option(prefix + 'match-' + str(tier_ctr), aslist=True, userlist=True)
 			if l == None or len(l) == 0:
 				break
 			tier_exprs.append(l)
 			tier_ctr += 1
 		self.tier_exprs = tier_exprs
-		self.next_batch_char = get_tmux_option_key_curses('@copytk-quickcopy-next-batch-char', ' n', aslist=True)
-		self.em_label_chars = ''.join(( c for c in self.em_label_chars if c not in self.next_batch_char ))
-		log('constructor finished')
+		self.next_batch_char = get_tmux_option_key_curses(prefix + 'next-batch-char', ' n', aslist=True)
+		self.min_match_len = get_tmux_option(prefix + 'min-match-len', 4)
+		self.pack_tiers = str2bool(get_tmux_option(prefix + 'pack-tiers', 'on'))
 
 	def _matchobj(self, start, end, tier=0):
 		return (
@@ -937,8 +944,7 @@ class QuickCopyAction(PaneJumpAction):
 			for expr in exprs:
 				allmatches.extend(self._matchobjs(self.find_expr_matches(expr), tier))
 		# Filter out matches shorter than the minimum
-		min_match_len = get_tmux_option('@copytk-quickcopy-min-match-len', 4)
-		return [ m for m in allmatches if m[1] >= min_match_len ]
+		return [ m for m in allmatches if m[1] >= self.min_match_len ]
 
 	def arrange_matches(self, matches, pack_tiers=True):
 		# Arrange the set of matches into batches of non-overlapping ones, by tier, and by shortness (shorter preferred)
@@ -1050,17 +1056,16 @@ class QuickCopyAction(PaneJumpAction):
 		else:
 			return batch
 
-	def run(self):
+	def run_quickselect(self):
 		log('quickcopy run')
 		# Get a list of all matches
 		matches = self.find_matches()
 		log('find_matches() result: ' + str(matches))
-		if len(matches) == 0: return
+		if len(matches) == 0: raise ActionCanceled()
 		log('got matches')
 
 		# Group them into display batches
-		pack_tiers = str2bool(get_tmux_option('@copytk-quickcopy-pack-tiers', 'on'))
-		batches = self.arrange_matches(matches)
+		batches = self.arrange_matches(matches, self.pack_tiers)
 		log('arrange_matches() result: ' + str(batches))
 		log('arranged matches')
 
@@ -1074,19 +1079,71 @@ class QuickCopyAction(PaneJumpAction):
 			if selected: break
 		if not selected: raise ActionCanceled()
 
-		# Got result.  Do copy.
+		# Got result.
 		selected_data = selected[0][2]
 		log('Copied: ' + selected_data)
+		return selected_data, selected
+
+	def run(self):
+		selected_data, selected = self.run_quickselect()
 		execute_copy(selected_data)
 
 		# Flash highlights
 		self.match_locations = None
 		hl_ranges = [ (match[4], match[5]) for match in selected ]
 		flash_only_one = str2bool(get_tmux_option('@copytk-flash-only-one', 'on'))
-		if flash_only_one: hl_ranges = [ hl_ranges[0] ]
+		if flash_only_one: hl_ranges = [ hl_ranges[-1] ]
 		self.flash_highlight_range(hl_ranges, preflash=True)
 
-			
+
+class QuickOpenAction(QuickCopyAction):
+	
+	def __init__(self, stdscr):
+		super().__init__(stdscr, options_prefix='@copytk-quickopen-')
+		self.command_extra_env = self.load_env_file()
+
+	def load_env_file(self):
+		fn = os.path.expanduser(get_tmux_option('@copytk-quickopen-env-file', '~/.tmux-copytk-env'))
+		if not os.path.exists(fn):
+			return {}
+		ret = {}
+		with open(fn, 'r') as f:
+			for line in f:
+				line = line.strip()
+				if not len(line): continue
+				if line[0] == '#': continue
+				parts = line.split('=')
+				if len(parts) < 2: continue
+				name = parts[0]
+				value = '='.join(parts[1:])
+				if len(value) >= 2 and value[0] in ('"', "'") and value[-1] in ('"', "'"):
+					value = value[1:-1]
+				ret[name] = value
+		log('Loaded env file: ' + str(ret))
+		return ret
+
+	def run(self):
+		selected_data, selected = self.run_quickselect()
+		log('quickopen selected: ' + selected_data)
+
+		default_open_cmd = 'xdg-open'
+		if platform.system() == 'Darwin':
+			default_open_cmd = 'open'
+		open_cmd = get_tmux_option('@copytk-quickopen-open-command', default_open_cmd)
+		env = dict(os.environ)
+		env.update(self.command_extra_env)
+		full_cmd = 'nohup ' + open_cmd + " '" + selected_data + "' &>/dev/null & disown"
+		log('Command: ' + full_cmd)
+		log('Env: ' + str(env))
+		subprocess.Popen(
+			full_cmd,
+			executable='/bin/bash',
+			shell=True,
+			env=env,
+			close_fds=True
+		)
+
+
 def run_easymotion(stdscr):
 	nkeys = 1
 	if args.search_nkeys:
@@ -1104,7 +1161,8 @@ def run_quickcopy(stdscr):
 	log('run_quickcopy')
 	QuickCopyAction(stdscr).run()
 
-
+def run_quickopen(stdscr):
+	QuickOpenAction(stdscr).run()
 
 
 
@@ -1194,6 +1252,8 @@ try:
 		curses.wrapper(run_easycopy)
 	elif args.action == 'quickcopy':
 		curses.wrapper(run_quickcopy)
+	elif args.action == 'quickopen':
+		curses.wrapper(run_quickopen)
 	else:
 		print('Invalid action')
 		exit(1)
