@@ -65,6 +65,7 @@ tmux set -g @copytk-quickcopy-match-3-2 ''\''([^'\'\\'n]*)'\'
 # Match whole lines
 tmux set -g @copytk-quickcopy-match-4-0 lines
 
+# Matches for quickopen
 tmux set -g @copytk-quickopen-match-0-0 urls
 tmux set -g @copytk-quickopen-match-0-1 abspaths
 
