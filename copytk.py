@@ -562,7 +562,6 @@ class PaneJumpAction:
 
 		# Highlighted location
 		if not keep_highlight:
-			self.highlight_location = None
 			self.highlight_ranges = None # range is inclusive
 
 		# display current contents
@@ -653,15 +652,6 @@ class PaneJumpAction:
 	def redraw(self):
 		self._redraw_contents()
 		self._redraw_labels()
-		# highlight char
-		if self.highlight_location:
-			loc = self.highlight_location
-			if loc[0] < self.curses_size[1] and loc[1] < self.curses_size[0] and not (loc[0] == self.curses_size[1] - 1 and loc[1] == self.curses_size[0] - 1):
-				try:
-					c = self.display_content_lines[loc[1]][loc[0]]
-				except:
-					c = '['
-				self.stdscr.addch(loc[1], loc[0], c, curses.color_pair(3))
 		# highlight ranges
 		self._redraw_highlight_ranges()
 		# status message
@@ -831,7 +821,7 @@ class EasyCopyAction(EasyMotionAction):
 		# Input searches to get bounds
 		pos1 = self.do_easymotion('search')
 		if not pos1: return
-		self.highlight_location = pos1
+		self.highlight_ranges = [ (pos1, pos1) ]
 		self.reset(keep_highlight=True)
 		# restrict second search to after first position
 		pos2 = self.do_easymotion(
