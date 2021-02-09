@@ -673,7 +673,10 @@ class PaneJumpAction:
 		if valid == None:
 			valid = lambda k: len(k) == 1 and k.isprintable()
 		while True:
-			key = self.stdscr.getkey()
+			try:
+				key = self.stdscr.getkey()
+			except: # fix occasional weird curses bug where this behaves as non-blocking
+				key = 'none'
 			#if key in ('^[', '^C', '\n', '\x1b'):
 			if key in self.cancel_keys:
 				self.cancel()
