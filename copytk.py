@@ -221,7 +221,7 @@ def get_tmux_option_key_curses(name, default=None, optmode='g', aslist=False):
 def capture_pane_contents(target=None, opts=None):
 	args = [ 'capture-pane', '-p' ]
 	if opts:
-		args += [ '-' + opts ]
+		args += opts
 	if target != None:
 		args += [ '-t', target ]
 	return runtmux(args)[:-1]
@@ -230,7 +230,7 @@ def get_pane_info(target=None, capture=False, capturej=False):
 	args = [ 'display-message', '-p' ]
 	if target != None:
 		args += [ '-t', target ]
-	args += [ '#{session_id} #{window_id} #{pane_id} #{pane_width} #{pane_height} #{window_zoomed_flag} #{cursor_x} #{cursor_y} #{copy_cursor_x} #{copy_cursor_y} #{pane_mode}' ]
+	args += [ '#{session_id} #{window_id} #{pane_id} #{pane_width} #{pane_height} #{window_zoomed_flag} #{cursor_x} #{cursor_y} #{copy_cursor_x} #{copy_cursor_y} #{pane_mode} #{scroll_position}' ]
 	r = runtmux(args, one=True).split(' ')
 	try:
 		cursorpos = (int(r[6]), int(r[7]))
@@ -249,12 +249,17 @@ def get_pane_info(target=None, capture=False, capturej=False):
 		'pane_id_full': r[0] + ':' + r[1] + '.' + r[2],
 		'pane_size': (int(r[3]), int(r[4])),
 		'zoomed': bool(int(r[5])),
-		'cursor': copycursorpos if mode == 'copy-mode' else cursorpos
+		'cursor': copycursorpos if mode == 'copy-mode' else cursorpos,
+		'scroll_position': int(r[11]) if r[11] != '' else None,
+		'mode': mode
 	}
+	capture_opts = []
+	if mode == 'copy-mode' and rdict['scroll_position'] != None and rdict['scroll_position'] > 0:
+		capture_opts += [ '-S', str(-rdict['scroll_position']), '-E', str(-rdict['scroll_position'] + rdict['pane_size'][1] - 1) ]
 	if capture:
-		rdict['contents'] = capture_pane_contents(rdict['pane_id_full'])
+		rdict['contents'] = capture_pane_contents(rdict['pane_id_full'], capture_opts)
 	if capturej:
-		rdict['contentsj'] = capture_pane_contents(rdict['pane_id_full'], 'J')
+		rdict['contentsj'] = capture_pane_contents(rdict['pane_id_full'], [ '-J' ] + capture_opts)
 	return rdict
 
 def create_window_pane_of_size(size):
@@ -815,7 +820,6 @@ class EasyCopyAction(EasyMotionAction):
 
 	def __init__(self, stdscr, search_len=1):
 		super().__init__(stdscr, search_len)
-		#self.orig_pane['contentsj'] = capture_pane_contents(self.orig_pane['pane_id'], 'J')
 
 	def run(self):
 		log('easycopy swapping in hidden pane', time=True)
