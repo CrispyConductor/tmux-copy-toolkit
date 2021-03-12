@@ -78,7 +78,7 @@ Using [tmux plugin manager](https://github.com/tmux-plugins/tpm), add the follow
 to your tmux.conf:
 
 ```
-set -g @plugin 'crispy1989/tmux-copy-toolkit'
+set -g @plugin 'CrispyConductor/tmux-copy-toolkit'
 ```
 
 Then reload tmux with `Ctrl-b` `:source ~/.tmux.conf` and install TPM plugins
