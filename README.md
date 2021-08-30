@@ -8,6 +8,21 @@ This plugin combines, improves, and adds functionality on top of a common interf
 with particular attention paid to stability and reliability with respect to wrapped
 lines, panes, zooming, etc.
 
+* [Tmux Rapid Copy Toolkit](#tmux-rapid-copy-toolkit)
+   * [Features](#features)
+      * [easymotion](#easymotion)
+      * [easycopy](#easycopy)
+      * [quickcopy](#quickcopy)
+      * [quickopen](#quickopen)
+   * [Requirements](#requirements)
+   * [Installation](#installation)
+      * [Manual Install](#manual-install)
+   * [Keybinds](#keybinds)
+   * [Options](#options)
+      * [quickcopy/quickopen matches](#quickcopyquickopen-matches)
+         * [Custom quickcopy example](#custom-quickcopy-example)
+
+
 ## Features
 
 There are 4 major modes/features:
@@ -84,9 +99,19 @@ set -g @plugin 'CrispyConductor/tmux-copy-toolkit'
 Then reload tmux with `Ctrl-b` `:source ~/.tmux.conf` and install TPM plugins
 with `Ctrl-b` `I`.
 
-Manual installation is also easy, as the plugin is contained in a single python
-file.  Copy it where you'd like and add tmux options from `copytk.tmux`, adjusting
-paths accordingly.
+### Manual Install
+
+To install without TPM:
+
+```
+git clone https://github.com/CrispyConductor/tmux-copy-toolkit/ ~/path/to/somewhere/
+```
+
+Then add to `tmux.conf`:
+
+```
+run-shell ~/path/to/somewhere/copytk.tmux
+```
 
 ## Keybinds
 
@@ -97,7 +122,7 @@ tmux.conf.  The defaults can be suppressed by adding this to tmux.conf:
 set -g @copytk-no-default-binds on
 ```
 
-You can find the commands corresponding to each binding in `copytk.tmux`.
+You can find the commands corresponding to each binding in [copytk.tmux](copytk.tmux).
 
 Mode | Action | Default Key
 ---- | ------ | -----------
@@ -152,7 +177,7 @@ Pattern numbers also start as 0 (for each tier) and also must be contiguous.
 
 Any duplicate matches (within or across tiers) are removed; only the highest priority one is kept.
 
-For an example of what this looks like, take a look at the defaults in `copytk.tmux`.
+For an example of what this looks like, take a look at the defaults in [copytk.tmux](copytk.tmux).
 
 To suppress the default patterns and completely redefine your own:
 
@@ -174,6 +199,16 @@ In addition to these, the defaults include patterns for:
 - Commands entered after a $ prompt
 - Numbers longer than a threshold
 - Quote-enclosed strings
+
+#### Custom quickcopy example
+
+As an example, here's how one might define a simple quickcopy regex to match basic SQL-query-like things:
+
+```
+set -g @copytk-quickcopy-match-0-1 '(SELECT|INSERT) .+;'
+```
+
+This adds the regex as a tier 0 (high priority) match.  It's added as index 1 in tier 0 because quickcopy-match-0-0 is already used by the defaults (but can be changed).
 
 
 
