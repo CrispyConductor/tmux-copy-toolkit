@@ -106,28 +106,20 @@ def runtmux(args, one=False, lines=False, noblanklines=False, sendstdin=None):
 		return dlines[0] if len(dlines) > 0 else ''
 	return dlines if lines else data
 
-def runshellcommand(command, one=False, lines=False, noblanklines=False, sendstdin=None, raisenonzero=True):
+def runshellcommand(command, sendstdin=None, raisenonzero=True):
 	log('run shell command: ' + command, time=True)
 	with subprocess.Popen(
 		command,
 		shell=True,
 		executable='/bin/bash',
 		stdin=subprocess.PIPE if sendstdin != None else subprocess.DEVNULL,
-		stdout=subprocess.PIPE
+		stdout=subprocess.DEVNULL
 	) as proc:
 		if sendstdin != None and isinstance(sendstdin, str):
 			sendstdin = bytearray(sendstdin, 'utf8')
-		recvstdout, _ = proc.communicate(input=sendstdin)
+		proc.communicate(input=sendstdin)
 		if proc.returncode != 0 and raisenonzero:
 			raise Exception(f'Command {command} returned exit code {proc.returncode}')
-	data = recvstdout.decode('utf8')
-	if one or lines: # return list of lines
-		dlines = data.split('\n')
-		if not one and noblanklines:
-			dlines = [ l for l in dlines if len(l) > 0 ]
-	if one: # single-line
-		return dlines[0] if len(dlines) > 0 else ''
-	return dlines if lines else data
 
 
 def runtmuxmulti(argsets):
