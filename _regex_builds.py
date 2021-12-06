@@ -11,8 +11,8 @@ def make_path_regexes():
 	# paths with at least 3 elements, and never in the first or last element.  There cannot
 	# be more than one consecutive space, and it cannot be at the beginning or end of the
 	# element.
-	edge_delimiters = r'[][\s:=,#$"{}<>()' + "'" + ']'
-	edge_delimiters_w_slash = r'[][\s:=,#$"{}<>()/' + "'" + ']'
+	edge_delimiters = r'[][\s:=,#$"{}<>()`' + "'" + ']'
+	edge_delimiters_w_slash = r'[][\s:=,#$"{}<>()`/' + "'" + ']'
 	leader = r'(?:^|' + edge_delimiters + ')'
 	leader_w_slash = r'(?:^|' + edge_delimiters_w_slash + ')'
 	follower = r'(?:$|' + edge_delimiters + ')'
