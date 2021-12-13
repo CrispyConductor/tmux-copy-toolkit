@@ -210,6 +210,33 @@ def get_tmux_option_key_curses(name, default=None, optmode='g', aslist=False):
 	else:
 		return remap.get(v, v)
 
+def get_tmux_option_color_pair_curses(name, default_fg=-1, default_bg=-1):
+	strmap = {
+		'none': -1,
+		'black': curses.COLOR_BLACK,
+		'red': curses.COLOR_RED,
+		'green': curses.COLOR_GREEN,
+		'yellow': curses.COLOR_YELLOW,
+		'blue': curses.COLOR_BLUE,
+		'magenta': curses.COLOR_MAGENTA,
+		'cyan': curses.COLOR_CYAN,
+		'white': curses.COLOR_WHITE
+	}
+	v = get_tmux_option(name)
+	if v == None:
+		return (default_fg, default_bg)
+	parts = v.lower().split(':')
+	if parts[0] not in strmap:
+		raise Exception(f'Invalid color {parts[0]}')
+	fg = strmap[parts[0]]
+	if len(parts) > 1:
+		if parts[1] not in strmap:
+			raise Exception(f'Invalid color {parts[1]}')
+		bg = strmap[parts[1]]
+	else:
+		bg = default_bg
+	return (fg, bg)
+
 def capture_pane_contents(target=None, opts=None):
 	args = [ 'capture-pane', '-p' ]
 	if opts:
@@ -538,10 +565,13 @@ class PaneJumpAction:
 		curses.curs_set(False)
 		curses.start_color()
 		curses.use_default_colors()
-		curses.init_pair(1, curses.COLOR_RED, -1) # color for label first char
-		curses.init_pair(2, curses.COLOR_YELLOW, -1) # color for label second+ char
-		curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_YELLOW) # color for highlight
-		curses.init_pair(4, curses.COLOR_RED, -1)
+		def init_color(index, optname, default_fg, default_bg):
+			pair = get_tmux_option_color_pair_curses(optname, default_fg, default_bg)
+			curses.init_pair(index, pair[0], pair[1])
+		init_color(1, '@copytk-color-labelchar', curses.COLOR_RED, -1) # first label char
+		init_color(2, '@copytk-color-labelchar2', curses.COLOR_YELLOW, -1) # second+ label char
+		init_color(3, '@copytk-color-highlight', curses.COLOR_GREEN, curses.COLOR_YELLOW) # highlight
+		init_color(4, '@copytk-color-message', curses.COLOR_RED, -1) # status message
 		self.stdscr.clear()
 
 		# Track the size as known by curses

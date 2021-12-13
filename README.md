@@ -162,6 +162,10 @@ Option | Default | Description
 `@copytk-flash-only-one` | `on` | In quickcopy mode, if there is more than one instance of the copied text on-screen, this is whether to flash all occurrences of the text or just one.
 `@copytk-quickopen-env-file` | `~/.tmux-copytk-env` | Path to a file containing newlike-separated `KEY=VALUE` environment variables.  These are added to the environment for running the open command.  Generation of this file can be automated in your shellrc.
 `@copytk-quickopen-open-command` | `xdg-open` on Linux, `open` on Mac | Command to run to open selected blocks in quickopen.  The selected text is passed as an argument.
+`@copytk-color-highlight` | `green:yellow` | The color to use for highlighted matches, in the form `foreground`:`background`.  Valid names are: `none`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`
+`@copytk-color-labelchar` | `red:none` | The color to use for the first/active label character.
+`@copytk-color-labelchar2` | `yellow:none` | The color to use for the second and subsequent label characters.
+`@copytk-color-message` | `red:none` | The color to use for the status message.
 
 ### quickcopy/quickopen matches
 
