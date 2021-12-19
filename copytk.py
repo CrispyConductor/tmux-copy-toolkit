@@ -266,7 +266,7 @@ def get_pane_info(target=None, capture=False, capturej=False):
 		'window_id_full': r[0] + ':' + r[1],
 		'pane_id': r[2],
 		'pane_id_full': r[0] + ':' + r[1] + '.' + r[2],
-		'pane_size': (int(r[3]), int(r[4])),
+		'pane_size': (int(r[3]), int(r[4])), # (width, height)
 		'zoomed': bool(int(r[5])),
 		'cursor': copycursorpos if mode == 'copy-mode' else cursorpos,
 		'scroll_position': int(r[11]) if r[11] != '' else None,
@@ -276,8 +276,10 @@ def get_pane_info(target=None, capture=False, capturej=False):
 	if mode == 'copy-mode' and rdict['scroll_position'] != None and rdict['scroll_position'] > 0:
 		capture_opts += [ '-S', str(-rdict['scroll_position']), '-E', str(-rdict['scroll_position'] + rdict['pane_size'][1] - 1) ]
 	if capture:
+		# The "normal" pane capture includes "hard" newlines at line wraps and truncates trailing spaces
 		rdict['contents'] = capture_pane_contents(rdict['pane_id_full'], capture_opts)
 	if capturej:
+		# The "-J" pane capture includes trailing spaces and does not have newlines for wrapping
 		rdict['contentsj'] = capture_pane_contents(rdict['pane_id_full'], [ '-J' ] + capture_opts)
 	return rdict
 
@@ -378,6 +380,17 @@ def gen_em_labels(n, chars=None, min_nchars=1, max_nchars=None):
 			yield ''.join(label)
 
 def process_pane_capture_lines(data, nlines=None):
+	"""Given the string blob of data from `tmux capture-pane`, returns an array of line strings.
+
+	Arguments:
+		data -- String blob of data from `tmux capture-pane`
+		nlines -- Maximum number of lines to return
+
+	Returns:
+		An array of line strings.  Each line string corresponds to a single visible line such that
+		a wrapped line is returned as multiple visible lines.  Nonprintable characters are removed
+		and tabs are converted to spaces.
+	"""
 	# processes pane capture data into an array of lines
 	# also handles nonprintables
 	lines = [
@@ -540,6 +553,7 @@ class PaneJumpAction:
 
 		# Fetch options
 		self.em_label_chars = get_tmux_option('@copytk-label-chars', 'asdghklqwertyuiopzxcvbnmfj;')
+		self.has_capital_label_chars = bool(re.search(r'[A-Z]', self.em_label_chars))
 
 		# Sanitize the J capture data by removing trailing spaces on each line
 		self.copy_data = '\n'.join(( line.rstrip() for line in self.orig_pane['contentsj'].split('\n') ))
@@ -728,6 +742,7 @@ class EasyMotionAction(PaneJumpAction):
 		self.search_len = search_len
 		self.case_sensitive_search = get_tmux_option('@copytk-case-sensitive-search', 'upper') # value values: on, off, upper
 		self.min_match_spacing = int(get_tmux_option('@copytk-min-match-spacing', '2'))
+		self.loc_label_mapping = {} # override mapping from match loc tuples to labels
 
 	def _em_filter_locs(self, locs):
 		d = args.search_direction
@@ -777,6 +792,15 @@ class EasyMotionAction(PaneJumpAction):
 		return search_str
 
 	def get_locations(self, action):
+		"""Returns a list of (x, y) locations of potential match locations.
+
+		Arguments:
+			action -- Either 'search' (to input a search char) or 'lines' (to use each line as a location)
+
+		Returns:
+			A list of (x, y) tuples where y is the line number and x is the character in the line.  The lines
+			represent "physical" lines (eg. a single wrapped line is treated as multiple physical lines here.)
+		"""
 		pane_search_lines = self.display_content_lines
 		log('\n'.join(pane_search_lines), 'pane_search_lines')
 
@@ -793,7 +817,21 @@ class EasyMotionAction(PaneJumpAction):
 		else:
 			raise Exception('Invalid copytk easymotion action')
 
-	def do_easymotion(self, action, filter_locs=None, sort_close_to=None):
+	def _input_easymotion_keys(self):
+		"""Waits for easymotion keypresses to select match; filters possible matches as is executed."""
+		# Wait for label presses
+		keyed_label = ''
+		while True: # loop over each key/char in the label
+			keyed_label += self.getkey()
+			self.cur_label_pos += 1
+			self.match_locations = [ m for m in self.match_locations if m[2].startswith(keyed_label) ]
+			if len(self.match_locations) < 2:
+				break
+			self.redraw()
+		log('keyed label: ' + keyed_label, time=True)
+
+
+	def do_easymotion(self, action, filter_locs=None, sort_close_to=None, save_labels=False):
 		# Get possible jump locations sorted by proximity to cursor
 		locs = self.get_locations(action)
 		locs = self._em_filter_locs(locs)
@@ -805,21 +843,28 @@ class EasyMotionAction(PaneJumpAction):
 
 		# Assign each match a label
 		label_it = gen_em_labels(len(locs), self.em_label_chars)
-		self.match_locations = [ (ml[0], ml[1], next(label_it) ) for ml in locs ]
+		self.match_locations = []
+		used_labels = { label : loc for loc, label in self.loc_label_mapping.items() }
+		for ml in locs:
+			if ml in self.loc_label_mapping:
+				label = self.loc_label_mapping[ml]
+			else:
+				while True:
+					label = next(label_it)
+					if label not in used_labels:
+						break
+			used_labels[label] = ml
+			self.match_locations.append(( ml[0], ml[1], label ))
+
+		# If save_labels is true, preserve labels for locations across batches
+		if save_labels:
+			self.loc_label_mapping.update({ loc : label for label, loc in used_labels.items() })
 
 		# Draw labels
 		self.redraw()
 
-		# Wait for label presses
-		keyed_label = ''
-		while True: # loop over each key/char in the label
-			keyed_label += self.getkey()
-			self.cur_label_pos += 1
-			self.match_locations = [ m for m in self.match_locations if m[2].startswith(keyed_label) ]
-			if len(self.match_locations) < 2:
-				break
-			self.redraw()
-		log('keyed label: ' + keyed_label, time=True)
+		# Wait for keypresses
+		self._input_easymotion_keys()
 
 		if len(self.match_locations) == 0:
 			return None
@@ -865,6 +910,76 @@ class EasyCopyAction(EasyMotionAction):
 
 		# Find the data associated with this range and run the copy command
 		selected_data = self.copy_data[self.disp_copy_map[pos1] : self.disp_copy_map[pos2] + 1]
+		log('Copied: ' + selected_data)
+		execute_copy(selected_data)
+
+		# Flash selected range as confirmation
+		self.flash_highlight_range((pos1, pos2))
+
+
+class LineCopyAction(EasyMotionAction):
+
+	def __init__(self, stdscr):
+		super().__init__(stdscr)
+
+	# override from EasyMotionAction to support single-char line selection
+	def _input_easymotion_keys(self):
+		"""Waits for easymotion keypresses to select match; filters possible matches as is executed."""
+		keyed_label = ''
+		while True: # loop over each key/char in the label
+			k = self.getkey()
+			if not self.has_capital_label_chars and re.fullmatch('[A-Z]', k) and self.easymotion_phase == 0:
+				# Enable single-line-copy mode
+				k = k.lower()
+				self.single_line_copy = True
+			keyed_label += k
+			self.cur_label_pos += 1
+			self.match_locations = [ m for m in self.match_locations if m[2].startswith(keyed_label) ]
+			if len(self.match_locations) < 2:
+				break
+			self.redraw()
+		log('keyed label: ' + keyed_label, time=True)
+
+	def run(self):
+		log('easycopy linecopy swapping in hidden pane', time=True)
+		swap_hidden_pane(True)
+
+		# Input searches to get bounds
+		self.easymotion_phase = 0
+		self.single_line_copy = False
+		pos1 = self.do_easymotion('lines', save_labels=True)
+		if not pos1: return
+
+		if self.single_line_copy:
+			# Copy single logical line starting at pos1.
+			# Find end of line as a copy data index
+			startidx = self.disp_copy_map[pos1]
+			endidx = self.copy_data.find('\n', startidx)
+			if endidx == -1:
+				endidx = len(self.copy_data)
+				pos2 = self.copy_disp_map[len(self.copy_data) - 1]
+				selected_data = self.copy_data[startidx:]
+			else:
+				pos2 = self.copy_disp_map[endidx-1]
+				selected_data = self.copy_data[startidx:endidx]
+		else:
+			self.highlight_ranges = [ (pos1, pos1) ]
+			self.reset(keep_highlight=True)
+			# restrict second search to after first position
+			self.easymotion_phase = 1
+			pos2 = self.do_easymotion(
+				'lines',
+				filter_locs=lambda loc: loc[1] > pos1[1] or (loc[1] == pos1[1] and loc[0] >= pos1[0]),
+				sort_close_to=pos1
+			)
+			if not pos2: return
+
+			# since typing last n letters of word, advance end position by n-1 (-1 because range is inclusive)
+			pos2 = (self.orig_pane['pane_size'][0] - 1, pos2[1])
+
+			# Find the data associated with this range and run the copy command
+			selected_data = self.copy_data[self.disp_copy_map[pos1] : self.disp_copy_map[pos2] + 1]
+
 		log('Copied: ' + selected_data)
 		execute_copy(selected_data)
 
@@ -1162,6 +1277,9 @@ def run_easycopy(stdscr):
 		nkeys = int(args.search_nkeys)
 	EasyCopyAction(stdscr, nkeys).run()
 
+def run_linecopy(stdscr):
+	LineCopyAction(stdscr).run()
+
 def run_quickcopy(stdscr):
 	QuickCopyAction(stdscr).run()
 
@@ -1254,6 +1372,8 @@ try:
 		curses.wrapper(run_easymotion)
 	elif args.action == 'easycopy':
 		curses.wrapper(run_easycopy)
+	elif args.action == 'linecopy':
+		curses.wrapper(run_linecopy)
 	elif args.action == 'quickcopy':
 		curses.wrapper(run_quickcopy)
 	elif args.action == 'quickopen':

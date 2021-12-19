@@ -30,6 +30,10 @@ tmux bind-key -T copytk Y run-shell -b "python3 $CURRENT_DIR/copytk.py easycopy 
 tmux bind-key -T prefix S run-shell -b "python3 $CURRENT_DIR/copytk.py easycopy --search-nkeys 1"
 tmux bind-key -T prefix C-s run-shell -b "python3 $CURRENT_DIR/copytk.py easycopy --search-nkeys 1"
 
+# tmux prefix: linecopy action bindings
+tmux bind-key -T prefix W run-shell -b "python3 $CURRENT_DIR/copytk.py linecopy"
+tmux bind-key -T prefix C-w run-shell -b "python3 $CURRENT_DIR/copytk.py easycopy linecopy"
+
 # tmux prefix: quickcopy action bindings
 tmux bind-key -T prefix Q run-shell -b "python3 $CURRENT_DIR/copytk.py quickcopy"
 tmux bind-key -T prefix C-q run-shell -b "python3 $CURRENT_DIR/copytk.py quickcopy"

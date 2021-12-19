@@ -25,7 +25,7 @@ lines, panes, zooming, etc.
 
 ## Features
 
-There are 4 major modes/features:
+There are 5 major modes/features:
 
 ### easymotion
 
@@ -82,6 +82,25 @@ except that only openable things are highlighted.  Selecting one invokes
 to import X environment variables from external source to ensure the command
 can reach X.
 
+### linecopy
+
+This mode allows copying blocks of full lines, or a single line; essentially a
+faster version of easycopy when the start and end points are both line boundaries.
+
+To use, hit `Ctrl-b` `W` to activate linecopy mode.  The beginning of each terminal
+line is replaced by the label string.  Key in a label string to select the first line
+to copy, then the label string for the last line to copy (inclusive).  The block of
+lines will then be copied.
+
+To copy a single line, key in that line's label using uppercase letters.  In this
+case, do not enter a second label.  This will not work if there are any capital
+letters defined in the label chars.  Single-line copies can also be performed
+using quickcopy.
+
+Line beginnings are assigned for all terminal lines, including wrapped lines; but
+the end of a line always goes to the end of a "logical" line (a hard line break).
+This allows both easily copying wrapped lines and copying some partial lines.
+
 ## Requirements
 
 - python3
@@ -134,6 +153,7 @@ copy | easymotion lines action (all lines) | `S` `n`
 any | easycopy | `<Prefix>` `S`
 any | quickcopy | `<Prefix>` `Q`
 any | quickopen | `<Prefix>` `P`
+any | linecopy | `<Prefix>` `W`
 
 ## Options
 
