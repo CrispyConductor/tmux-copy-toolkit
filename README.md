@@ -14,6 +14,7 @@ lines, panes, zooming, etc.
       * [easycopy](#easycopy)
       * [quickcopy](#quickcopy)
       * [quickopen](#quickopen)
+      * [linecopy](#linecopy)
    * [Requirements](#requirements)
    * [Installation](#installation)
       * [Manual Install](#manual-install)
