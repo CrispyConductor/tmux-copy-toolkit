@@ -32,7 +32,7 @@ tmux bind-key -T prefix C-s run-shell -b "python3 $CURRENT_DIR/copytk.py easycop
 
 # tmux prefix: linecopy action bindings
 tmux bind-key -T prefix W run-shell -b "python3 $CURRENT_DIR/copytk.py linecopy"
-tmux bind-key -T prefix C-w run-shell -b "python3 $CURRENT_DIR/copytk.py easycopy linecopy"
+tmux bind-key -T prefix C-w run-shell -b "python3 $CURRENT_DIR/copytk.py linecopy"
 
 # tmux prefix: quickcopy action bindings
 tmux bind-key -T prefix Q run-shell -b "python3 $CURRENT_DIR/copytk.py quickcopy"
